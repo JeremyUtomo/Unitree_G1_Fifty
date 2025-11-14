@@ -1,12 +1,36 @@
 import time
 import sys
+from typing import Optional
+
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from dataclasses import dataclass
 from hanger_boot_sequence import hanger_boot_sequence
+from unitree_sdk2py.g1.loco.g1_loco_api import (
+    ROBOT_API_ID_LOCO_GET_FSM_ID,
+    ROBOT_API_ID_LOCO_GET_FSM_MODE,
+)
 
+def _rpc_get_int(client: LocoClient, api_id: int) -> Optional[int]:
+    try:
+        code, data = client._Call(api_id, "{}")  # type: ignore[attr-defined]
+        if code == 0 and data:
+            import json
+
+            return json.loads(data).get("data")
+    except Exception:
+        pass
+    return None
+
+
+def _fsm_id(client: LocoClient) -> Optional[int]:
+    return _rpc_get_int(client, ROBOT_API_ID_LOCO_GET_FSM_ID)
+
+
+def _fsm_mode(client: LocoClient) -> Optional[int]:
+    return _rpc_get_int(client, ROBOT_API_ID_LOCO_GET_FSM_MODE)
 
 @dataclass
 class TestOption:
@@ -74,6 +98,7 @@ if __name__ == "__main__":
 
     print("Input \"list\" to list all test option ...")
     while True:
+        print("fsm ID: ", _fsm_id(sport_client))
         user_interface.terminal_handle()
 
         print(f"Updated Test Option: Name = {test_option.name}, ID = {test_option.id}")
