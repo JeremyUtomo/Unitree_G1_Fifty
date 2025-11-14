@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-
-"""
-This script moves both arms in a 3-stage sequence WHILE the
-robot's high-level balancing controller is active.
-
-It uses the 'rt/arm_sdk' topic to safely blend arm commands
-with the robot's internal balancing logic.
-
-*** *** CRITICAL SAFETY WARNING ***
-A FALL IS STILL POSSIBLE. Moving the arms changes the
-robot's center of mass. Be prepared for an emergency stop.
-***
-"""
-
 import sys
 import time
 import threading
@@ -44,9 +29,11 @@ Kd_Arm = 1.0
 LEFT_ARM_JOINT_IDS = [15, 16, 17, 18, 19, 20, 21]
 RIGHT_ARM_JOINT_IDS = [22, 23, 24, 25, 26, 27, 28]
 
+TARGET_POSITIONS_STOP_RIGHT = [0.246, -0.281, 0.089, 0.768, 0.000, 0.000, 0.000 ]
+
 # --- STAGE 1 Target positions ---
-TARGET_POSITIONS_1_RIGHT = [0.251, -0.277, 0.089, 0.791, -0.013, 0.003, -0.004]
-TARGET_POSITIONS_1_LEFT =  [0.251,  0.277, -0.089, 0.791,  0.013, 0.003,  0.004]
+TARGET_POSITIONS_1_RIGHT = [0.246, -0.281, 0.089, 0.768, 0.000, 0.000, 0.000]
+TARGET_POSITIONS_1_LEFT =  [0.246,  0.281, -0.089, 0.768,  0.000, 0.000,  0.000]
 
 # --- STAGE 2 Target positions ---
 TARGET_POSITIONS_2_RIGHT = [-0.041, -0.072, -0.120, 0.418, 0.063, -0.646, 0.400]
@@ -57,9 +44,17 @@ TARGET_POSITIONS_2_LEFT =  [-0.041,  0.072,  0.120, 0.418, -0.063, -0.646, -0.40
 TARGET_POSITIONS_3_RIGHT = [0.041, -0.058, 0.478, 0.455, 0.070, -0.560, -0.453]
 TARGET_POSITIONS_3_LEFT =  [0.041, 0.058,  -0.478, 0.455, -0.070, -0.560, 0.453]
 
+# --- STAGE 4 Target positions ---
 TARGET_POSITIONS_4_RIGHT = [-1.551, -0.075, -0.168, -0.067, 0.080, -0.156, -0.048]
 TARGET_POSITIONS_4_LEFT  = [-1.551,  0.075,  0.168, -0.067, -0.080, -0.156,  0.048]
 
+# --- STAGE 5 Target positions ---
+TARGET_POSITIONS_5_RIGHT = [-2.410, -0.437, -0.085, -0.047, -0.094, -0.159, -0.061]
+TARGET_POSITIONS_5_LEFT  = [-2.410,  0.437,  0.085, -0.047,  0.094, -0.159,  0.061]
+
+# --- STAGE 6 Target positions ---
+TARGET_POSITIONS_6_RIGHT = [-2.751, -0.491, 0.109, -0.593, -0.094, -0.161, -0.085]
+TARGET_POSITIONS_6_LEFT  = [-2.751,  0.491, -0.109, -0.593,  0.094, -0.161,  0.085]
 
 class ArmMover:
     # --- CHANGED: control_dt_ is now 0.02 (50Hz) to match examples ---
@@ -85,7 +80,11 @@ class ArmMover:
         # 1 = Moving to STAGE 1
         # 2 = Moving to STAGE 2
         # 3 = Moving to STAGE 3
-        # 4 = Releasing control
+        # 4 = Moving to STAGE 4
+        # 5 = Moving to STAGE 5
+        # 6 = Moving to STAGE 6
+        # 7 = Returning to STAGE 1 (before stop)
+        # 8 = Releasing control
         self.move_stage = 1
         self.lock = threading.Lock()
 
@@ -149,15 +148,41 @@ class ArmMover:
         self.move_stage = 3
         self.position_reached_event.clear()
 
+    def MoveToStage4(self):
+        print("Moving to Stage 4...")
+        if not self._update_start_positions():
+            return
+        self.start_time = time.time()
+        self.move_stage = 4
+        self.position_reached_event.clear()
+
+    def MoveToStage5(self):
+        print("Moving to Stage 5...")
+        if not self._update_start_positions():
+            return
+        self.start_time = time.time()
+        self.move_stage = 5
+        self.position_reached_event.clear()
+
+    def MoveToStage6(self):
+        print("Moving to Stage 6...")
+        if not self._update_start_positions():
+            return
+        self.start_time = time.time()
+        self.move_stage = 6
+        self.position_reached_event.clear()
+
     # --- NEW: Function to handle graceful stop ---
     def Stop(self):
         """
-        Begins the fade-out process to release control.
+        First returns to Stage 1 position, then begins the fade-out process to release control.
         """
-        print("Releasing arm control (fading weight to 0)...")
+        print("Returning to Stage 1 position before releasing control...")
+        if not self._update_start_positions():
+            return
         self.start_time = time.time()
-        self.move_duration_ = 1.0 # Set a 1-second fade-out time
-        self.move_stage = 4 # Enter the "releasing" stage
+        self.move_duration_ = 3 # Set duration for returning to Stage 1
+        self.move_stage = 7 # Enter the "return to Stage 1" stage
         self.position_reached_event.clear() # Re-use this event
 
     def _control_loop(self):
@@ -190,8 +215,8 @@ class ArmMover:
         
         # --- Handle logic based on the current stage ---
         
-        if self.move_stage < 4:
-            # --- STAGES 1, 2, 3: Moving arms ---
+        if self.move_stage < 7:
+            # --- STAGES 1, 2, 3, 4, 5, 6: Moving arms ---
             
             # Set the "weight" of our command (Index 29)
             self.low_cmd.motor_cmd[29].q = 1.0 
@@ -203,9 +228,18 @@ class ArmMover:
             elif self.move_stage == 2:
                 target_left = TARGET_POSITIONS_2_LEFT
                 target_right = TARGET_POSITIONS_2_RIGHT
-            else: # self.move_stage == 3
+            elif self.move_stage == 3:
                 target_left = TARGET_POSITIONS_3_LEFT
                 target_right = TARGET_POSITIONS_3_RIGHT
+            elif self.move_stage == 4:
+                target_left = TARGET_POSITIONS_4_LEFT
+                target_right = TARGET_POSITIONS_4_RIGHT
+            elif self.move_stage == 5:
+                target_left = TARGET_POSITIONS_5_LEFT
+                target_right = TARGET_POSITIONS_5_RIGHT
+            else: # self.move_stage == 6
+                target_left = TARGET_POSITIONS_6_LEFT
+                target_right = TARGET_POSITIONS_6_RIGHT
 
             # Set commands for the LEFT Arm joints (15-21)
             for i, joint_id in enumerate(LEFT_ARM_JOINT_IDS):
@@ -235,10 +269,67 @@ class ArmMover:
                 motor_cmd.kd = Kd_Arm
                 motor_cmd.tau = 0.0
 
-        elif self.move_stage == 4:
-            # --- STAGE 4: Releasing control ---
-            # Fade weight from 1.0 down to 0.0
+        elif self.move_stage == 7:
+            # --- STAGE 7: Returning to Stage 1 position ---
+            # Set the "weight" of our command (Index 29)
+            self.low_cmd.motor_cmd[29].q = 1.0
+            
+            # Target is Stage 1 position
+            target_left = TARGET_POSITIONS_1_LEFT
+            target_right = TARGET_POSITIONS_1_RIGHT
+            
+            # Set commands for the LEFT Arm joints (15-21)
+            for i, joint_id in enumerate(LEFT_ARM_JOINT_IDS):
+                start_q = start_pos_left[i]
+                target_q = target_left[i]
+                interp_q = start_q + (target_q - start_q) * ratio
+                
+                motor_cmd = self.low_cmd.motor_cmd[joint_id]
+                motor_cmd.q = interp_q
+                motor_cmd.dq = 0.0
+                motor_cmd.kp = Kp_Arm
+                motor_cmd.kd = Kd_Arm
+                motor_cmd.tau = 0.0
+            
+            # Set commands for the RIGHT Arm joints (22-28)
+            for i, joint_id in enumerate(RIGHT_ARM_JOINT_IDS):
+                start_q = start_pos_right[i]
+                target_q = target_right[i]
+                interp_q = start_q + (target_q - start_q) * ratio
+                
+                motor_cmd = self.low_cmd.motor_cmd[joint_id]
+                motor_cmd.q = interp_q
+                motor_cmd.dq = 0.0
+                motor_cmd.kp = Kp_Arm
+                motor_cmd.kd = Kd_Arm
+                motor_cmd.tau = 0.0
+        
+        elif self.move_stage == 8:
+            # --- STAGE 8: Releasing control ---
+            # Fade weight from 1.0 down to 0.0 while maintaining Stage 1 position
             self.low_cmd.motor_cmd[29].q = 1.0 - ratio
+            
+            # Hold Stage 1 position during fade-out
+            target_left = TARGET_POSITIONS_1_LEFT
+            target_right = TARGET_POSITIONS_1_RIGHT
+            
+            # Set commands for the LEFT Arm joints (15-21)
+            for i, joint_id in enumerate(LEFT_ARM_JOINT_IDS):
+                motor_cmd = self.low_cmd.motor_cmd[joint_id]
+                motor_cmd.q = target_left[i]  # Hold at Stage 1 position
+                motor_cmd.dq = 0.0
+                motor_cmd.kp = Kp_Arm
+                motor_cmd.kd = Kd_Arm
+                motor_cmd.tau = 0.0
+            
+            # Set commands for the RIGHT Arm joints (22-28)
+            for i, joint_id in enumerate(RIGHT_ARM_JOINT_IDS):
+                motor_cmd = self.low_cmd.motor_cmd[joint_id]
+                motor_cmd.q = target_right[i]  # Hold at Stage 1 position
+                motor_cmd.dq = 0.0
+                motor_cmd.kp = Kp_Arm
+                motor_cmd.kd = Kd_Arm
+                motor_cmd.tau = 0.0
         
         # Finalize and send the command
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
@@ -248,9 +339,12 @@ class ArmMover:
         self.loop_counter += 1
         if self.loop_counter % 25 == 0: # Print every 0.5 sec
             if ratio < 1.0:
-                print(f"Moving to position (Stage {self.move_stage})... {int(ratio * 100)}% complete.")
-            elif self.move_stage == 4:
-                print(f"Releasing control... {int((1.0 - ratio) * 100)}% weight.")
+                if self.move_stage == 7:
+                    print(f"Returning to Stage 1... {int(ratio * 100)}% complete.")
+                elif self.move_stage == 8:
+                    print(f"Releasing control... {int((1.0 - ratio) * 100)}% weight remaining.")
+                else:
+                    print(f"Moving to position (Stage {self.move_stage})... {int(ratio * 100)}% complete.")
         
         # Handle stage transitions
         if ratio == 1.0:
@@ -265,7 +359,30 @@ class ArmMover:
                     print(f"Target position for Stage 3 reached. Holding.")
                     self.position_reached_event.set()
                 elif self.move_stage == 4:
-                    # --- NEW: Handle final stop ---
+                    print(f"Target position for Stage 4 reached. Holding.")
+                    self.position_reached_event.set()
+                elif self.move_stage == 5:
+                    print(f"Target position for Stage 5 reached. Holding.")
+                    self.position_reached_event.set()
+                elif self.move_stage == 6:
+                    print(f"Target position for Stage 6 reached. Holding.")
+                    self.position_reached_event.set()
+                elif self.move_stage == 7:
+                    # Returned to Stage 1, now fade out control
+                    print("Returned to Stage 1. Now releasing arm control...")
+                    # Update start positions to current (Stage 1) positions before fading
+                    with self.lock:
+                        if self.low_state is not None:
+                            for i, joint_id in enumerate(LEFT_ARM_JOINT_IDS):
+                                self.start_positions_left[i] = self.low_state.motor_state[joint_id].q
+                            for i, joint_id in enumerate(RIGHT_ARM_JOINT_IDS):
+                                self.start_positions_right[i] = self.low_state.motor_state[joint_id].q
+                    self.start_time = time.time()
+                    self.move_duration_ = 1.0  # 2 seconds to fade out
+                    self.move_stage = 8  # Move to release stage
+                    self.position_reached_event.clear()
+                elif self.move_stage == 8:
+                    # Final stop
                     print("Arm control released. Stopping thread.")
                     self.position_reached_event.set()
                     self.is_stopped_event.set() # Signal main thread
@@ -321,7 +438,40 @@ if __name__ == '__main__':
         # 6. Wait until Stage 3 position is reached
         mover.position_reached_event.wait()
         
-        print("\nStage 3 reached. Holding position. Press Ctrl+C to stop.")
+        # 7. Ask user to continue to Stage 4
+        print("\n" + "="*80)
+        input("Stage 3 reached. Press Enter to move to Stage 4...")
+        print("="*80)
+        
+        # 8. Trigger Stage 4
+        mover.MoveToStage4()
+        
+        # 9. Wait until Stage 4 position is reached
+        mover.position_reached_event.wait()
+        
+        # 10. Ask user to continue to Stage 5
+        print("\n" + "="*80)
+        input("Stage 4 reached. Press Enter to move to Stage 5...")
+        print("="*80)
+        
+        # 11. Trigger Stage 5
+        mover.MoveToStage5()
+        
+        # 12. Wait until Stage 5 position is reached
+        mover.position_reached_event.wait()
+        
+        # 13. Ask user to continue to Stage 6
+        print("\n" + "="*80)
+        input("Stage 5 reached. Press Enter to move to Stage 6...")
+        print("="*80)
+        
+        # 14. Trigger Stage 6
+        mover.MoveToStage6()
+        
+        # 15. Wait until Stage 6 position is reached
+        mover.position_reached_event.wait()
+        
+        print("\nStage 6 reached. Holding position. Press Ctrl+C to stop.")
         
         # Keep the main thread alive while the control thread holds
         while True:
@@ -333,6 +483,6 @@ if __name__ == '__main__':
         mover.Stop()
         
         # Wait for the fade-out to complete
-        mover.is_stopped_event.wait(timeout=2.0)
+        mover.is_stopped_event.wait(timeout=10.0)
         
         print("Script terminated. Robot is back in walking mode.")
