@@ -1,125 +1,183 @@
 import time
 import sys
 from typing import Optional
-
-from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
-from unitree_sdk2py.idl.default import unitree_go_msg_dds__SportModeState_
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
-from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from dataclasses import dataclass
-from hanger_boot_sequence import hanger_boot_sequence
+
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from unitree_sdk2py.g1.loco.g1_loco_api import (
     ROBOT_API_ID_LOCO_GET_FSM_ID,
     ROBOT_API_ID_LOCO_GET_FSM_MODE,
 )
 
+try:
+    from hanger_boot_sequence import hanger_boot_sequence
+    HANGER_BOOT_AVAILABLE = True
+except ImportError:
+    HANGER_BOOT_AVAILABLE = False
+
+
 def _rpc_get_int(client: LocoClient, api_id: int) -> Optional[int]:
+    """Helper to get integer value from RPC call."""
     try:
         code, data = client._Call(api_id, "{}")  # type: ignore[attr-defined]
         if code == 0 and data:
             import json
-
             return json.loads(data).get("data")
     except Exception:
         pass
     return None
 
 
-def _fsm_id(client: LocoClient) -> Optional[int]:
+def get_fsm_id(client: LocoClient) -> Optional[int]:
+    """Get current FSM ID from robot."""
     return _rpc_get_int(client, ROBOT_API_ID_LOCO_GET_FSM_ID)
 
 
-def _fsm_mode(client: LocoClient) -> Optional[int]:
+def get_fsm_mode(client: LocoClient) -> Optional[int]:
+    """Get current FSM mode from robot."""
     return _rpc_get_int(client, ROBOT_API_ID_LOCO_GET_FSM_MODE)
 
 @dataclass
-class TestOption:
+class Command:
+    """Robot movement command."""
     name: str
     id: int
+    description: str = ""
 
-option_list = [ 
-    TestOption(name=" ", id=0), #damp
-    TestOption(name="w", id=1), #forwards
-    TestOption(name="s", id=2), #backwards
-    TestOption(name="a", id=3), #left side step
-    TestOption(name="d", id=4), #right side step
-    TestOption(name="q", id=5), #left rotate
-    TestOption(name="e", id=6), #right rotate
-    TestOption(name="b", id=7), #go into balance
-    TestOption(name="squat", id=8),
+
+# Available movement commands
+COMMANDS = [
+    Command(name="stop", id=0, description="Stop/Damp"),
+    Command(name="w", id=1, description="Move forward"),
+    Command(name="s", id=2, description="Move backward"),
+    Command(name="a", id=3, description="Side step left"),
+    Command(name="d", id=4, description="Side step right"),
+    Command(name="q", id=5, description="Rotate left"),
+    Command(name="e", id=6, description="Rotate right"),
+    Command(name="b", id=7, description="Balance mode"),
 ]
 
-class UserInterface:
-    def __init__(self):
-        self.test_option_ = None
 
-    def convert_to_int(self, input_str):
-        try:
-            return int(input_str)
-        except ValueError:
-            return None
+class LocoInterface:
+    """Interactive terminal interface for locomotion control."""
+    
+    def __init__(self, client: LocoClient):
+        self.client = client
+        self.current_command: Optional[Command] = None
 
-    def terminal_handle(self):
-        input_str = input("Enter id or name: \n")
+    def show_commands(self):
+        """Display all available commands."""
+        print("\n" + "="*60)
+        print("Available Commands:")
+        print("="*60)
+        for cmd in COMMANDS:
+            print(f"  {cmd.name:8s} (id: {cmd.id}) - {cmd.description}")
+        print("="*60 + "\n")
+
+    def get_command(self) -> Optional[Command]:
+        """Get command from user input."""
+        input_str = input("Enter command (or 'list' for options): ").strip().lower()
 
         if input_str == "list":
-            self.test_option_.name = None
-            self.test_option_.id = None
-            for option in option_list:
-                print(f"{option.name}, id: {option.id}")
-            return
+            self.show_commands()
+            return None
 
-        for option in option_list:
-            if input_str == option.name or self.convert_to_int(input_str) == option.id:
-                self.test_option_.name = option.name
-                self.test_option_.id = option.id
-                print(f"Test: {self.test_option_.name}, test_id: {self.test_option_.id}")
-                return
+        if input_str == "exit" or input_str == "quit":
+            return Command(name="exit", id=-1, description="Exit program")
 
-        print("No matching test option found.")
+        # Try to match by name or ID
+        try:
+            input_id = int(input_str)
+            for cmd in COMMANDS:
+                if cmd.id == input_id:
+                    return cmd
+        except ValueError:
+            for cmd in COMMANDS:
+                if cmd.name == input_str:
+                    return cmd
+
+        print(f"⚠️  Unknown command: '{input_str}'")
+        return None
+
+    def execute_command(self, cmd: Command):
+        """Execute a locomotion command."""
+        if cmd.id == 0:
+            self.client.Damp()
+            print("🛑 Stop/Damp")
+        elif cmd.id == 1:
+            self.client.Move(1, 0, 0)
+            print("⬆️  Moving forward")
+        elif cmd.id == 2:
+            self.client.Move(-1, 0, 0)
+            print("⬇️  Moving backward")
+        elif cmd.id == 3:
+            self.client.Move(0, 0.3, 0)
+            print("⬅️  Side step left")
+        elif cmd.id == 4:
+            self.client.Move(0, -0.3, 0)
+            print("➡️  Side step right")
+        elif cmd.id == 5:
+            self.client.Move(0, 0, 0.5)
+            print("↺  Rotating left")
+        elif cmd.id == 6:
+            self.client.Move(0, 0, -0.5)
+            print("↻  Rotating right")
+        elif cmd.id == 7:
+            if HANGER_BOOT_AVAILABLE:
+                print("🤸 Starting balance mode sequence...")
+                hanger_boot_sequence(iface=sys.argv[1])
+            else:
+                print("⚠️  Hanger boot sequence not available")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: python3 {sys.argv[0]} networkInterface")
+        print(f"Usage: python3 {sys.argv[0]} <network_interface>")
+        print(f"Example: python3 {sys.argv[0]} eth0")
         sys.exit(-1)
 
-    print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
-    input("Press Enter to continue...")
+    print("="*80)
+    print("🤖 Unitree G1 - Locomotion Control")
+    print("="*80)
+    print("⚠️  WARNING: Ensure no obstacles around the robot!")
+    print("="*80)
+    input("\nPress Enter to continue...")
 
     ChannelFactoryInitialize(0, sys.argv[1])
 
-    test_option = TestOption(name=None, id=None) 
-    user_interface = UserInterface()
-    user_interface.test_option_ = test_option
+    # Initialize loco client
+    client = LocoClient()
+    client.SetTimeout(10.0)
+    client.Init()
+    
+    print("✅ Loco client initialized")
+    
+    # Create interface
+    interface = LocoInterface(client)
+    interface.show_commands()
 
-    sport_client = LocoClient()  
-    sport_client.SetTimeout(10.0)
-    sport_client.Init()
-
-    print("Input \"list\" to list all test option ...")
-    while True:
-        print("fsm ID: ", _fsm_id(sport_client))
-        user_interface.terminal_handle()
-
-        print(f"Updated Test Option: Name = {test_option.name}, ID = {test_option.id}")
-
-        if test_option.id == 0:
-            sport_client.Damp()
-        elif test_option.id == 1:
-            sport_client.Move(1,0,0)
-        elif test_option.id == 2:
-            sport_client.Move(-1,0,0)
-        elif test_option.id == 3:
-            sport_client.Move(0,0.3,0)
-        elif test_option.id == 4:
-            sport_client.Move(0,-0.3,0)
-        elif test_option.id == 5:
-            sport_client.Move(0,0,0.5)
-        elif test_option.id == 6:
-            sport_client.Move(0,0,-0.5)
-        elif test_option.id == 7:
-            hanger_boot_sequence(iface = sys.argv[0])
-        elif test_option.id == 8:
-            sport_client.Squat2StandUp()
-
-        time.sleep(1)
+    # Main control loop
+    try:
+        while True:
+            # Show current FSM state
+            fsm_id = get_fsm_id(client)
+            if fsm_id is not None:
+                print(f"📊 FSM ID: {fsm_id}")
+            
+            # Get command from user
+            cmd = interface.get_command()
+            
+            if cmd is None:
+                continue
+            
+            if cmd.id == -1:  # Exit command
+                print("\n👋 Goodbye!")
+                break
+            
+            # Execute command
+            interface.execute_command(cmd)
+            time.sleep(0.5)
+            
+    except KeyboardInterrupt:
+        print("\n\n🛑 Stopping...")
+        print("👋 Goodbye!")

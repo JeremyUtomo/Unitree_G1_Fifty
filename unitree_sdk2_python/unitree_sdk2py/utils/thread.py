@@ -51,6 +51,15 @@ class RecurrentThread(Thread):
         self.__quit = True
         super().Wait(timeout)
 
+    def Stop(self):
+        """Non-blocking stop: signal the loop to quit without waiting.
+
+        This mirrors older RecurrentThread APIs that expose Stop(). Calling
+        Stop() from inside the thread will not deadlock because it does not
+        wait for the thread to finish.
+        """
+        self.__quit = True
+
     def __LoopFunc(self):
         # clock type CLOCK_MONOTONIC = 1
         tfd = timerfd_create(1, 0)

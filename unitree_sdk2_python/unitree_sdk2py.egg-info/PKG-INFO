@@ -1,4 +1,4 @@
-Metadata-Version: 2.4
+Metadata-Version: 2.1
 Name: unitree_sdk2py
 Version: 1.0.1
 Summary: Unitree robot sdk version 2 for python
@@ -11,15 +11,6 @@ Description-Content-Type: text/markdown
 Requires-Dist: cyclonedds==0.10.2
 Requires-Dist: numpy
 Requires-Dist: opencv-python
-Dynamic: author
-Dynamic: author-email
-Dynamic: description
-Dynamic: description-content-type
-Dynamic: license
-Dynamic: project-url
-Dynamic: requires-dist
-Dynamic: requires-python
-Dynamic: summary
 
 # unitree_sdk2_python
 Python interface for unitree sdk2
