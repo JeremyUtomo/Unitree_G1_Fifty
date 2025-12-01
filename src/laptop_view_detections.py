@@ -188,9 +188,10 @@ def main():
     import os
     os.environ['QT_QPA_PLATFORM'] = 'xcb'
     
-    # Create windows before starting threads
-    cv2.namedWindow("G1 Can Detection", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("G1 Depth", cv2.WINDOW_NORMAL)
+    # Create single window before starting threads
+    cv2.namedWindow("G1 Camera Stream", cv2.WINDOW_NORMAL)
+    # Set window to 2x size (640*2 = 1280 width for RGB + depth side by side, 480*2 = 960 height)
+    cv2.resizeWindow("G1 Camera Stream", 2560, 960)
     
     # Start stream receiver
     receiver = DualStreamReceiver(args.rgb_port, args.depth_port)
@@ -214,8 +215,10 @@ def main():
         while True:
             rgb, depth = receiver.get_frames()
             
+            combined = None
+            
             if rgb is not None:
-                # Add FPS overlay
+                # Add FPS overlay to RGB
                 cv2.putText(rgb, f"RGB FPS: {receiver.rgb_fps:.1f}", (10, rgb.shape[0] - 40),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 cv2.putText(rgb, f"Depth FPS: {receiver.depth_fps:.1f}", (10, rgb.shape[0] - 15),
@@ -226,47 +229,54 @@ def main():
                     cv2.putText(rgb, "REC", (rgb.shape[1] - 80, 35),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                 
-                # Show RGB with detections
-                if fullscreen:
-                    cv2.setWindowProperty("G1 Can Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                # Combine RGB and depth side-by-side
+                if depth is not None:
+                    # Make sure both images have the same height
+                    if rgb.shape[0] != depth.shape[0]:
+                        depth = cv2.resize(depth, (depth.shape[1], rgb.shape[0]))
+                    
+                    # Add labels
+                    cv2.putText(rgb, "Detections", (10, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(depth, "Depth", (10, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    combined = cv2.hconcat([rgb, depth])
                 else:
-                    cv2.setWindowProperty("G1 Can Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+                    combined = rgb
                 
-                cv2.imshow("G1 Can Detection", rgb)
+                # Show combined window
+                if fullscreen:
+                    cv2.setWindowProperty("G1 Camera Stream", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                else:
+                    cv2.setWindowProperty("G1 Camera Stream", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
                 
-                # Record if enabled
+                cv2.imshow("G1 Camera Stream", combined)
+                
+                # Record if enabled (record the combined view)
                 if recording and video_writer is not None:
-                    video_writer.write(rgb)
-            
-            # Show depth if available
-            if depth is not None:
-                cv2.imshow("G1 Depth", depth)
+                    video_writer.write(combined)
             
             # Keyboard controls
             key = cv2.waitKey(1) & 0xFF
             
             if key == ord('q'):
                 break
-            elif key == ord('s') and rgb is not None:
+            elif key == ord('s') and combined is not None:
                 save_counter += 1
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f'detection_{timestamp}_{save_counter}.png'
-                cv2.imwrite(filename, rgb)
+                cv2.imwrite(filename, combined)
                 print(f"✓ Saved: {filename}")
-                
-                if depth is not None:
-                    depth_filename = f'depth_{timestamp}_{save_counter}.png'
-                    cv2.imwrite(depth_filename, depth)
-                    print(f"✓ Saved: {depth_filename}")
             
-            elif key == ord('r') and rgb is not None:
+            elif key == ord('r') and combined is not None:
                 if not recording:
                     # Start recording
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f'detection_video_{timestamp}.avi'
                     fourcc = cv2.VideoWriter_fourcc(*'XVID')
                     video_writer = cv2.VideoWriter(filename, fourcc, 20.0, 
-                                                   (rgb.shape[1], rgb.shape[0]))
+                                                   (combined.shape[1], combined.shape[0]))
                     recording = True
                     print(f"● Started recording: {filename}")
                 else:
