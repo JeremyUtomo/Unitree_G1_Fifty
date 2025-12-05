@@ -5,6 +5,11 @@ Detects bottles and rotates the G1 robot to center them in the camera view
 
 Usage:
     python3 auto_center_bottle.py --client-ip 192.168.123.222
+
+Camera in use error (on G1):
+-----------------------------
+pgrep -af auto_center_bottle.py
+kill <process id>
 """
 
 from __future__ import annotations
@@ -105,8 +110,8 @@ def detect_cans(model: YOLO, image: np.ndarray, confidence_threshold: float = 0.
     
     # Draw center line
     cv2.line(annotated, (CENTER_X, 0), (CENTER_X, CAMERA_HEIGHT), (255, 0, 0), 2)
-    cv2.putText(annotated, f"Bottles: {len(detections)}", (10, 30),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(annotated, f"Bottles: {len(detections)}", (10, 25),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     
     return annotated, detections
 
@@ -119,7 +124,7 @@ def get_depth_at_point(depth_frame, x: int, y: int) -> float:
 
 
 class BottleCenteringController:
-    """Controls robot rotation to center detected bottles"""
+    """Controls robot side-stepping to center detected bottles after table edge alignment"""
     
     def __init__(self, network_interface='eth0'):
         self.loco_client = None
@@ -134,6 +139,9 @@ class BottleCenteringController:
         self.error_history = []  # Smooth error over multiple frames
         self.max_history = 5  # Number of frames to average
         self.lost_threshold = 20  # Frames without detection before considering bottle truly lost
+        self.table_edge_detected = False  # Track if table edge has been detected
+        self.last_step_time = 0  # Track time of last side-step for delay
+        self.step_delay = 1.0  # 1 second delay between steps
         
     def init(self):
         """Initialize loco client"""
@@ -143,19 +151,20 @@ class BottleCenteringController:
         self.loco_client.Init()
         time.sleep(0.5)
         print("✅ Loco client initialized")
-        print("⚠️  Note: Robot must be in balance/stand mode for rotation to work")
+        print("⚠️  Note: Robot must be in balance/stand mode for side-stepping to work")
         
-    def start_centering(self, bottle):
-        """Start centering on a bottle"""
-        with self.lock:
-            self.target_bottle = bottle
+    def set_table_edge_detected(self):
+        """Enable side-stepping alignment after table edge is detected"""
+        if not self.table_edge_detected:
+            self.table_edge_detected = True
             self.is_centering = True
             self.centered = False
             self.last_known_error = 0
             self.frames_without_detection = 0
             self.bottle_lost = False
             self.error_history = []
-            print(f"\n🎯 Centering on bottle at X={bottle['center'][0]}")
+            self.last_step_time = 0
+            print(f"\n🎯 TABLE EDGE ALIGNED - Starting side-step alignment")
     
     def stop_centering(self):
         """Stop centering and halt robot (only called manually)"""
@@ -215,45 +224,64 @@ class BottleCenteringController:
                 print(f"\n✅ Centered! (error: {error:+d} px) - Continuing to track...")
                 self.centered = True
             
-            print(f"📍 Tracking: X={cx} (target={CENTER_X}), Error: {error:+d} px ✓ ALIGNED        ", end='\r')
+            # Check bottle depth for final positioning
+            bottle_depth = bottle.get('depth_m', 0)
+            if 0.50 <= bottle_depth <= 0.60:
+                print(f"🎯 BOTTLE CENTERED AND ALIGNED - Depth: {bottle_depth:.2f}m ✓        ", end='\r')
+            else:
+                print(f"📍 Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px ✓ ALIGNED (depth: {bottle_depth:.2f}m)        ", end='\r')
+            
+            # Stop movement when centered
+            if self.loco_client:
+                self.loco_client.Move(0, 0, 0)
         else:
-            # No longer centered - resume rotation
+            # No longer centered - resume alignment
             if self.centered:
-                print(f"\n🔄 Bottle moved - resuming centering...")
+                print(f"\n🔄 Bottle moved - resuming side-stepping...")
                 self.centered = False
             
-            print(f"📍 Bottle X: {cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
-        
-        # Calculate rotation direction and speed
-        # Positive error = bottle on right side of center line
-        # Need to rotate RIGHT to bring bottle toward center (negative yaw)
-        # Negative error = bottle on left side of center line  
-        # Need to rotate LEFT to bring bottle toward center (positive yaw)
-        # G1 convention: positive yaw = rotate left, negative yaw = rotate right
-        rotation_dir = -1.0 if error > 0 else 1.0
-        
-        # Proportional control with much slower speeds to prevent oscillation
-        speed_scale = min(abs(error) / CENTER_X, 1.0)
-        
-        # Use different speed profiles based on distance from center line
-        # Note: 0.35 is the minimum speed that makes the robot actually rotate
-        if abs(error) <= CENTER_THRESHOLD:
-            # Within threshold - stop completely
-            yaw_speed = 0.0
-        else:
-            # Any distance from center - use minimum rotation speed
-            yaw_speed = rotation_dir * 0.35
-        
-        # Debug: print yaw speed every 10 frames
-        if not hasattr(self, '_debug_counter'):
-            self._debug_counter = 0
-        self._debug_counter += 1
-        if self._debug_counter % 10 == 0:
-            print(f"\n🔧 DEBUG: error={error}, yaw_speed={yaw_speed:.3f}, dir={rotation_dir}")
-        
-        # Send rotation command (vx, vy, vyaw)
-        if self.loco_client:
-            self.loco_client.Move(0, 0, yaw_speed)
+            print(f"📍 Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
+            
+            # SIDE-STEP MODE: Move left/right to center bottle
+            # Positive error = bottle on right side of center line
+            # Need to step RIGHT (negative vy per loco_client.py) to bring bottle toward center
+            # Negative error = bottle on left side of center line
+            # Need to step LEFT (positive vy per loco_client.py) to bring bottle toward center
+            step_dir = -1.0 if error > 0 else 1.0
+            
+            # Use side-step speed (loco_client uses 0.3 for side-step)
+            vy_speed = step_dir * 0.3
+            
+            # Check if we should step or pause
+            current_time = time.time()
+            
+            if self.last_step_time == 0:
+                # First step - start immediately
+                self.last_step_time = current_time - self.step_delay
+            
+            time_since_last_step = current_time - self.last_step_time
+            
+            # Step for 0.5 seconds, then pause for 1 second
+            step_duration = 0.5
+            total_cycle = step_duration + self.step_delay
+            
+            if time_since_last_step < step_duration:
+                # Active stepping phase
+                print(f"\n🔧 SIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
+                if self.loco_client:
+                    self.loco_client.Move(0, vy_speed, 0)
+            elif time_since_last_step < total_cycle:
+                # Pause phase
+                wait_remaining = total_cycle - time_since_last_step
+                print(f"⏳ Waiting {wait_remaining:.1f}s for stable image...        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(0, 0, 0)
+            else:
+                # Start new cycle
+                self.last_step_time = current_time
+                print(f"\n🔧 SIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
+                if self.loco_client:
+                    self.loco_client.Move(0, vy_speed, 0)
     
     def stop(self):
         """Stop all motion"""
@@ -264,11 +292,11 @@ class BottleCenteringController:
 
 def main():
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--client-ip", required=True, help="Laptop IP address for streaming")
+    ap.add_argument("--client-ip", default="192.168.123.222", help="Laptop IP address for streaming")
     ap.add_argument("--network-interface", default="eth0", help="Network interface for robot communication")
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--height", type=int, default=480)
-    ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--confidence", type=float, default=0.5, help="Detection confidence threshold")
     ap.add_argument("--model", type=str, default="yolov8n.pt", help="YOLO model path")
     ap.add_argument("--skip-frames", type=int, default=3, help="Process every Nth frame for detection")
@@ -350,7 +378,7 @@ def main():
     duration = Gst.util_uint64_scale_int(1, Gst.SECOND, args.fps)
 
     print(f"\n🎥 Streaming to {args.client_ip}:5600 (RGB) and {args.client_ip}:5602 (depth)")
-    print("🔍 Looking for bottles to center...\n")
+    print("🔍 Waiting for table edge alignment...\n")
 
     frame_count = 0
     last_detections = []
@@ -394,7 +422,7 @@ def main():
                 
                 cv2.line(annotated_rgb, (CENTER_X, 0), (CENTER_X, CAMERA_HEIGHT), (255, 0, 0), 2)
                 cv2.putText(annotated_rgb, f"Bottles: {len(detections)}", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
             # Add depth info
             for det in detections:
@@ -407,15 +435,13 @@ def main():
                 cv2.putText(annotated_rgb, depth_text, (x1, y1 - 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
             
-            # Auto-centering logic
+            # Auto-centering logic - only after table edge detected
             if detections and not auto_center_started:
-                # First bottle detected - start centering
-                print(f"\n🎯 First bottle detected! Starting auto-centering...")
-                controller.start_centering(detections[0])
-                auto_center_started = True
+                # Bottle detected but waiting for table edge alignment
+                print(f"📦 Bottle detected - waiting for table edge alignment...        ", end='\r')
             
-            if auto_center_started and controller.is_centering:
-                # Update centering control - this now continuously tracks
+            if controller.is_centering:
+                # Update centering control - side-step mode
                 controller.update(detections)
                 
                 # Draw centering status
@@ -423,16 +449,69 @@ def main():
                     status = "CENTERED - TRACKING"
                     color = (0, 255, 0)
                 else:
-                    status = "CENTERING..."
+                    status = "SIDE-STEPPING..."
                     color = (0, 255, 255)
                 
-                cv2.putText(annotated_rgb, status, (10, 60),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                cv2.putText(annotated_rgb, status, (10, 70),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             
-            # Create depth visualization
+            # Create depth visualization with table surface detection
             depth_clip = np.clip(depth16, 0, 6000)
             depth8 = cv2.convertScaleAbs(depth_clip, alpha=255.0 / 6000.0)
             depth_bgr = cv2.applyColorMap(depth8, cv2.COLORMAP_PLASMA)
+            
+            # Detect table surface (find most common depth in lower half of image)
+            lower_half = depth16[CAMERA_HEIGHT//2:, :]
+            valid_depths = lower_half[(lower_half > 200) & (lower_half < 5000)]  # 0.2m to 5m range
+            
+            if len(valid_depths) > 100:  # Need enough samples
+                # Find the most common depth (table surface) using histogram
+                hist, bin_edges = np.histogram(valid_depths, bins=50)
+                peak_idx = np.argmax(hist)
+                table_depth = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
+                table_depth_m = table_depth / 1000.0
+                
+                
+                # Highlight table surface (within ±10cm of detected depth)
+                table_mask = np.abs(depth16.astype(float) - table_depth) < 100  # 10cm tolerance
+                depth_bgr[table_mask] = cv2.addWeighted(depth_bgr[table_mask], 0.5, 
+                                                        np.full_like(depth_bgr[table_mask], (0, 255, 255)), 0.5, 0)
+                
+                # Draw table depth info
+                cv2.putText(depth_bgr, f"Table: {table_depth_m:.2f}m", (10, 25),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # Draw horizontal line at y=380 (80% down the image)
+                check_y = 350
+                cv2.line(depth_bgr, (0, check_y), (CAMERA_WIDTH, check_y), (255, 0, 0), 2)
+                
+                # Check if the line intersects with yellow (table) pixels
+                if check_y < CAMERA_HEIGHT:
+                    line_pixels = table_mask[check_y, :]
+                    yellow_count = np.sum(line_pixels)
+                    
+                    # If more than 30% of the line is yellow (table detected)
+                    if yellow_count > CAMERA_WIDTH * 0.3:
+                        # Check if table depth is in edge range (0.60m - 0.65m)
+                        if 0.60 <= table_depth_m <= 0.65:
+                            if not hasattr(main, '_table_edge_detected') or not main._table_edge_detected:
+                                print(f"\n🎯 TABLE EDGE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
+                                main._table_edge_detected = True
+                                # Start side-step alignment mode
+                                controller.set_table_edge_detected()
+                                auto_center_started = True
+                        else:
+                            if not hasattr(main, '_table_line_detected') or not main._table_line_detected:
+                                print(f"\n📋 TABLE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
+                                main._table_line_detected = True
+                            if hasattr(main, '_table_edge_detected'):
+                                main._table_edge_detected = False
+                    else:
+                        if hasattr(main, '_table_line_detected'):
+                            main._table_line_detected = False
+                        if hasattr(main, '_table_edge_detected'):
+                            main._table_edge_detected = False
+
             
             for det in detections:
                 cx, cy = det['center']
