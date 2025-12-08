@@ -17,6 +17,12 @@ from hand_controller import HandController
 # Left arm joint indices
 LEFT_ARM_JOINT_IDS = [15, 16, 17, 18, 19, 20, 21]
 
+# Right arm joint indices
+RIGHT_ARM_JOINT_IDS = [22, 23, 24, 25, 26, 27, 28]
+
+# Right arm hold position (captured from monitor)
+RIGHT_ARM_HOLD_POSITION = [0.294, -0.229, 0.018, 0.977, -0.132, 0.028, -0.012]
+
 # Target positions from your data
 STARTING_POSITION = [0.256, 0.280, -0.079, 0.829, 0.005, 0.012, -0.001]
 POSITION_1 = [0.844, 0.247, -0.041, -0.991, -0.305, 0.049, 0.017]
@@ -65,6 +71,7 @@ class LeftArmSequence:
         
         self.hand_opened = False
         self.pressure_detected = False
+        self.interrupt_requested = False
         
     def Init(self):
         """Initialize publishers and hand controller"""
@@ -145,13 +152,28 @@ class LeftArmSequence:
         if not self.is_running:
             return
         
-        # Capture current position and set target to starting position
-        self._capture_current_positions()
-        self.target_positions = STARTING_POSITION.copy()
-        self.current_stage = STAGE_INTERRUPT_RETURN
-        self.move_duration = 3.0
-        self.start_time = time.time()
+        # Set interrupt flag to stop any ongoing operations
+        self.interrupt_requested = True
+        
+        # Return through Position 1 to Starting Position
         print("🔄 Interrupt received - returning to starting position...")
+        
+        if self.current_stage == STAGE_POSITION_3:
+            # From Position 3, go to Position 1 first - capture actual positions
+            if not self._capture_current_positions():
+                # Fallback to known Position 3 if capture fails
+                self.start_positions = POSITION_3.copy()
+            self.target_positions = POSITION_1.copy()
+            self.current_stage = STAGE_RETURN_TO_POSITION_1
+            self.move_duration = 5.0  # Slower transition: 5 seconds
+            self.start_time = time.time()
+        else:
+            # From any other stage, go directly to starting position
+            self._capture_current_positions()
+            self.target_positions = STARTING_POSITION.copy()
+            self.current_stage = STAGE_INTERRUPT_RETURN
+            self.move_duration = 3.0
+            self.start_time = time.time()
     
     def release_to_walking_mode(self):
         """Release arm control and return to walking mode"""
@@ -211,6 +233,12 @@ class LeftArmSequence:
             self.low_cmd.motor_cmd[joint_id].q = interp_q
             self.low_cmd.motor_cmd[joint_id].kp = Kp_ARM
             self.low_cmd.motor_cmd[joint_id].kd = Kd_ARM
+        
+        # Hold right arm at fixed position throughout sequence
+        for i, joint_id in enumerate(RIGHT_ARM_JOINT_IDS):
+            self.low_cmd.motor_cmd[joint_id].q = RIGHT_ARM_HOLD_POSITION[i]
+            self.low_cmd.motor_cmd[joint_id].kp = Kp_ARM
+            self.low_cmd.motor_cmd[joint_id].kd = Kd_ARM
             
         # Hold waist at 0
         self.low_cmd.motor_cmd[12].q = 0.0
@@ -258,6 +286,10 @@ class LeftArmSequence:
                 print("▶️  Moving to Position 3...")
                 
             elif self.current_stage == STAGE_POSITION_3:
+                # Check if interrupt was requested during transition
+                if self.interrupt_requested:
+                    return  # Exit immediately, graceful_stop has already set up return path
+                
                 # Close hand after position 3
                 print("🤏 Closing hand until pressure detected...")
                 self.hand_controller.close_left_hand()
@@ -268,6 +300,11 @@ class LeftArmSequence:
                 max_close_time = 3.0
                 
                 while (time.time() - close_start) < max_close_time:
+                    # Check for interrupt during pressure monitoring
+                    if self.interrupt_requested:
+                        print("⚠️  Interrupt during hand closing - aborting")
+                        return
+                    
                     if self._check_pressure():
                         print("✓ Pressure detected - holding position!")
                         self.hand_controller.hold_left_hand_position()
@@ -275,19 +312,13 @@ class LeftArmSequence:
                         break
                     time.sleep(0.05)  # Check at 20Hz
                 
-                if not self.pressure_detected:
+                if not self.pressure_detected and not self.interrupt_requested:
                     print("⚠️  No pressure detected - hand fully closed")
                 
-                time.sleep(1.0)  # Hold grasp briefly
-                
-                # Return to Position 1
-                self.start_positions = POSITION_3.copy()
-                self.target_positions = POSITION_1.copy()
-                self.current_stage = STAGE_RETURN_TO_POSITION_1
-                self.move_duration = 4.0
-                self.start_time = time.time()
-                print("▶️  Returning to Position 1...")
-                
+                # Hold position 3 indefinitely - wait for user interrupt
+                if not self.interrupt_requested:
+                    print("✅ Position 3 reached - holding position until Ctrl+C...")
+                # Don't transition to next stage - stay in STAGE_POSITION_3
             elif self.current_stage == STAGE_RETURN_TO_POSITION_1:
                 # Return to starting position
                 self.start_positions = POSITION_1.copy()
@@ -298,13 +329,20 @@ class LeftArmSequence:
                 print("▶️  Returning to starting position...")
                 
             elif self.current_stage == STAGE_RETURN_START:
-                # Sequence complete - return to neutral and release control
-                print("✅ Sequence complete!")
+                # Returned to starting - now release control
+                print("✅ Returned to starting position")
                 self.start_positions = STARTING_POSITION.copy()
                 self.current_stage = STAGE_RETURN_TO_NEUTRAL
                 self.move_duration = 3.0
                 self.start_time = time.time()
-                print("🔄 Returning to neutral position...")
+            
+            elif self.current_stage == STAGE_INTERRUPT_RETURN:
+                # Interrupt return complete - now release
+                print("✅ Returned to starting position")
+                self.start_positions = STARTING_POSITION.copy()
+                self.current_stage = STAGE_RETURN_TO_NEUTRAL
+                self.move_duration = 3.0
+                self.start_time = time.time()
             
             elif self.current_stage == STAGE_RETURN_TO_NEUTRAL:
                 # Neutral position reached - now release arm control
@@ -318,14 +356,6 @@ class LeftArmSequence:
                 # Control released - walking mode restored
                 print("✅ Walking mode restored")
                 self.stop()
-            
-            elif self.current_stage == STAGE_INTERRUPT_RETURN:
-                # Interrupt return complete - now return to neutral and release
-                print("✅ Returned to starting position")
-                self.start_positions = STARTING_POSITION.copy()
-                self.current_stage = STAGE_RETURN_TO_NEUTRAL
-                self.move_duration = 3.0
-                self.start_time = time.time()
 
 
 def main():
