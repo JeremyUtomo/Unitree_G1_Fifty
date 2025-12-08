@@ -40,7 +40,7 @@ CAN_CLASS_IDS = [39, 41, 42, 43, 44]  # bottle, cup, wine glass, mug, vase
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CENTER_X = CAMERA_WIDTH // 2
-CENTER_THRESHOLD = 25  # Pixels - moderate margin for centered alignment
+CENTER_THRESHOLD = 35  # Pixels - larger margin for centered alignment
 MAX_YAW_SPEED = 0.5  # rad/s - maximum angular velocity (matches loco_client)
 MIN_YAW_SPEED = 0.03  # rad/s - extremely slow minimum speed for perfect alignment
 MIN_CONFIDENCE = 0.5  # Minimum detection confidence
@@ -226,7 +226,7 @@ class BottleCenteringController:
             
             # Check bottle depth for final positioning
             bottle_depth = bottle.get('depth_m', 0)
-            if 0.50 <= bottle_depth <= 0.60:
+            if 0.48 <= bottle_depth <= 0.52:
                 print(f"🎯 BOTTLE CENTERED AND ALIGNED - Depth: {bottle_depth:.2f}m ✓        ", end='\r')
             else:
                 print(f"📍 Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px ✓ ALIGNED (depth: {bottle_depth:.2f}m)        ", end='\r')
@@ -240,6 +240,13 @@ class BottleCenteringController:
                 print(f"\n🔄 Bottle moved - resuming side-stepping...")
                 self.centered = False
             
+            # Check if bottle is aligned (within threshold) before allowing step
+            if abs(error) < CENTER_THRESHOLD:
+                print(f"✅ Bottle aligned (error: {error:+d} px) - no step needed        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(0, 0, 0)
+                return
+            
             print(f"📍 Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
             
             # SIDE-STEP MODE: Move left/right to center bottle
@@ -250,28 +257,39 @@ class BottleCenteringController:
             step_dir = -1.0 if error > 0 else 1.0
             
             # Use side-step speed (loco_client uses 0.3 for side-step)
-            vy_speed = step_dir * 0.3
+            vy_speed = step_dir * 0.2
             
             # Check if we should step or pause
             current_time = time.time()
             
             if self.last_step_time == 0:
-                # First step - start immediately
-                self.last_step_time = current_time - self.step_delay
+                # First step - wait 1 second for clear image before starting
+                self.last_step_time = current_time
+                print(f"\n📸 Waiting 1s for clear image before first step...")
+                if self.loco_client:
+                    self.loco_client.Move(0, 0, 0)
+                return
             
             time_since_last_step = current_time - self.last_step_time
             
-            # Step for 0.5 seconds, then pause for 1 second
+            # Wait 1 second for clear image, step for 0.5 seconds, then pause for 1 second
+            initial_wait = 1.0
             step_duration = 0.5
-            total_cycle = step_duration + self.step_delay
+            total_cycle = initial_wait + step_duration + self.step_delay
             
-            if time_since_last_step < step_duration:
+            if time_since_last_step < initial_wait:
+                # Initial wait for clear image
+                wait_remaining = initial_wait - time_since_last_step
+                print(f"📸 Waiting {wait_remaining:.1f}s for clear image before step...        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(0, 0, 0)
+            elif time_since_last_step < initial_wait + step_duration:
                 # Active stepping phase
                 print(f"\n🔧 SIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
                 if self.loco_client:
                     self.loco_client.Move(0, vy_speed, 0)
             elif time_since_last_step < total_cycle:
-                # Pause phase
+                # Pause phase after step
                 wait_remaining = total_cycle - time_since_last_step
                 print(f"⏳ Waiting {wait_remaining:.1f}s for stable image...        ", end='\r')
                 if self.loco_client:
@@ -279,9 +297,9 @@ class BottleCenteringController:
             else:
                 # Start new cycle
                 self.last_step_time = current_time
-                print(f"\n🔧 SIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
+                print(f"\n📸 Waiting 1s for clear image before next step...")
                 if self.loco_client:
-                    self.loco_client.Move(0, vy_speed, 0)
+                    self.loco_client.Move(0, 0, 0)
     
     def stop(self):
         """Stop all motion"""

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""
-Unitree G1 Left Arm - Custom 3-Position Sequence
-Moves through: Starting Position → Position 1 → Position 2 → Hand Open
+"""Unitree G1 Left Arm - Custom 4-Position Sequence
+Moves through: Starting Position → Position 1 → Position 2 → Position 3 → Hand Open → Position 1 → Starting Position
 """
 import time
 import sys
@@ -20,14 +19,17 @@ LEFT_ARM_JOINT_IDS = [15, 16, 17, 18, 19, 20, 21]
 
 # Target positions from your data
 STARTING_POSITION = [0.256, 0.280, -0.079, 0.829, 0.005, 0.012, -0.001]
-POSITION_1 = [0.944, 0.269, -0.101, -0.746, 0.002, -0.238, 0.028]
-POSITION_2 = [-0.348, -0.090, -0.452, 0.360, -0.152, -0.007, 0.224]
+POSITION_1 = [0.844, 0.247, -0.041, -0.991, -0.305, 0.049, 0.017]
+POSITION_2 = [-0.255, 0.221, 0.312, 0.016, 0.010, 0.215, -0.087]
+POSITION_3 = [-0.442, 0.004, -0.058, 0.183, -0.112, 0.002, 0.014]
 
 # Stage names for clarity
 STAGE_START = 0
 STAGE_POSITION_1 = 1
 STAGE_POSITION_2 = 2
-STAGE_RETURN_START = 3
+STAGE_POSITION_3 = 3
+STAGE_RETURN_TO_POSITION_1 = 4
+STAGE_RETURN_START = 5
 STAGE_RETURN_TO_NEUTRAL = 'return_to_neutral'  # Return to neutral position
 STAGE_RELEASE_CONTROL = 'release_control'      # Release arm SDK control
 STAGE_INTERRUPT_RETURN = 'interrupt_return'    # Interrupt handler - return to start
@@ -223,7 +225,7 @@ class LeftArmSequence:
         if ratio >= 1.0:
             if self.current_stage == STAGE_START:
                 # Move to Position 1
-                self._capture_current_positions()
+                self.start_positions = STARTING_POSITION.copy()
                 self.target_positions = POSITION_1.copy()
                 self.current_stage = STAGE_POSITION_1
                 self.move_duration = 4.0
@@ -232,7 +234,7 @@ class LeftArmSequence:
                 
             elif self.current_stage == STAGE_POSITION_1:
                 # Move to Position 2
-                self._capture_current_positions()
+                self.start_positions = POSITION_1.copy()
                 self.target_positions = POSITION_2.copy()
                 self.current_stage = STAGE_POSITION_2
                 self.move_duration = 4.0
@@ -240,36 +242,55 @@ class LeftArmSequence:
                 print("▶️  Moving to Position 2...")
                 
             elif self.current_stage == STAGE_POSITION_2:
-                # Open and close hand after position 2
+                # Open hand after position 2
                 if not self.hand_opened:
                     print("🖐️  Opening hand...")
                     self.hand_controller.open_left_hand()
                     time.sleep(2.5)  # Wait for hand to open
-                    
-                    print("🤏 Closing hand until pressure detected...")
-                    self.hand_controller.close_left_hand()
-                    self.pressure_detected = False
-                    
-                    # Monitor pressure while closing
-                    close_start = time.time()
-                    max_close_time = 3.0
-                    
-                    while (time.time() - close_start) < max_close_time:
-                        if self._check_pressure():
-                            print("✓ Pressure detected - holding position!")
-                            self.hand_controller.hold_left_hand_position()
-                            self.pressure_detected = True
-                            break
-                        time.sleep(0.05)  # Check at 20Hz
-                    
-                    if not self.pressure_detected:
-                        print("⚠️  No pressure detected - hand fully closed")
-                    
-                    time.sleep(1.0)  # Hold grasp briefly
                     self.hand_opened = True
                 
+                # Move to Position 3
+                self.start_positions = POSITION_2.copy()
+                self.target_positions = POSITION_3.copy()
+                self.current_stage = STAGE_POSITION_3
+                self.move_duration = 4.0
+                self.start_time = time.time()
+                print("▶️  Moving to Position 3...")
+                
+            elif self.current_stage == STAGE_POSITION_3:
+                # Close hand after position 3
+                print("🤏 Closing hand until pressure detected...")
+                self.hand_controller.close_left_hand()
+                self.pressure_detected = False
+                
+                # Monitor pressure while closing
+                close_start = time.time()
+                max_close_time = 3.0
+                
+                while (time.time() - close_start) < max_close_time:
+                    if self._check_pressure():
+                        print("✓ Pressure detected - holding position!")
+                        self.hand_controller.hold_left_hand_position()
+                        self.pressure_detected = True
+                        break
+                    time.sleep(0.05)  # Check at 20Hz
+                
+                if not self.pressure_detected:
+                    print("⚠️  No pressure detected - hand fully closed")
+                
+                time.sleep(1.0)  # Hold grasp briefly
+                
+                # Return to Position 1
+                self.start_positions = POSITION_3.copy()
+                self.target_positions = POSITION_1.copy()
+                self.current_stage = STAGE_RETURN_TO_POSITION_1
+                self.move_duration = 4.0
+                self.start_time = time.time()
+                print("▶️  Returning to Position 1...")
+                
+            elif self.current_stage == STAGE_RETURN_TO_POSITION_1:
                 # Return to starting position
-                self._capture_current_positions()
+                self.start_positions = POSITION_1.copy()
                 self.target_positions = STARTING_POSITION.copy()
                 self.current_stage = STAGE_RETURN_START
                 self.move_duration = 4.0
@@ -279,7 +300,7 @@ class LeftArmSequence:
             elif self.current_stage == STAGE_RETURN_START:
                 # Sequence complete - return to neutral and release control
                 print("✅ Sequence complete!")
-                self._capture_current_positions()
+                self.start_positions = STARTING_POSITION.copy()
                 self.current_stage = STAGE_RETURN_TO_NEUTRAL
                 self.move_duration = 3.0
                 self.start_time = time.time()
@@ -287,7 +308,7 @@ class LeftArmSequence:
             
             elif self.current_stage == STAGE_RETURN_TO_NEUTRAL:
                 # Neutral position reached - now release arm control
-                self._capture_current_positions()
+                self.start_positions = STARTING_POSITION.copy()
                 self.current_stage = STAGE_RELEASE_CONTROL
                 self.move_duration = 1.0
                 self.start_time = time.time()
@@ -301,7 +322,7 @@ class LeftArmSequence:
             elif self.current_stage == STAGE_INTERRUPT_RETURN:
                 # Interrupt return complete - now return to neutral and release
                 print("✅ Returned to starting position")
-                self._capture_current_positions()
+                self.start_positions = STARTING_POSITION.copy()
                 self.current_stage = STAGE_RETURN_TO_NEUTRAL
                 self.move_duration = 3.0
                 self.start_time = time.time()
@@ -311,7 +332,7 @@ def main():
     print("=" * 80)
     print("🤖 Unitree G1 - Left Arm Custom Sequence")
     print("=" * 80)
-    print("📋 Sequence: Start → Position 1 → Position 2 → Start")
+    print("📋 Sequence: Start → Pos1 → Pos2 → Pos3 → Hand → Pos1 → Start")
     print("=" * 80)
     print("\n⚠️  SAFETY WARNING:")
     print("   - Ensure no obstacles near left arm")
