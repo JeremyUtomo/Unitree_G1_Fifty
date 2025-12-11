@@ -108,8 +108,20 @@ def detect_cans(model: YOLO, image: np.ndarray, confidence_threshold: float = 0.
             cv2.putText(annotated, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
-    # Draw center line
+    # Draw center line (vertical X-axis alignment)
     cv2.line(annotated, (CENTER_X, 0), (CENTER_X, CAMERA_HEIGHT), (255, 0, 0), 2)
+    
+    # Draw Y-position target lines (horizontal depth alignment)
+    # Y=250 - minimum target depth
+    cv2.line(annotated, (0, 250), (CAMERA_WIDTH, 250), (0, 255, 255), 2)
+    cv2.putText(annotated, "Y=250 (min depth)", (10, 245),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    
+    # Y=300 - maximum target depth
+    cv2.line(annotated, (0, 300), (CAMERA_WIDTH, 300), (0, 255, 255), 2)
+    cv2.putText(annotated, "Y=300 (max depth)", (10, 295),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    
     cv2.putText(annotated, f"Bottles: {len(detections)}", (10, 25),
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     
@@ -142,6 +154,10 @@ class BottleCenteringController:
         self.table_edge_detected = False  # Track if table edge has been detected
         self.last_step_time = 0  # Track time of last side-step for delay
         self.step_delay = 1.0  # 1 second delay between steps
+        self.forward_walking = False  # Track if we're walking forward
+        self.depth_aligned = False  # Track if depth alignment is complete
+        self.centering_complete_time = 0  # Track when horizontal centering was achieved
+        self.post_center_wait = 1.0  # Wait 1 second after centering before Y-axis alignment
         
     def init(self):
         """Initialize loco client"""
@@ -217,24 +233,65 @@ class BottleCenteringController:
             error = int(sum(self.error_history) / len(self.error_history))
             self.last_known_error = error
         
-        # Check if centered
+        # Check if centered horizontally (X-axis)
         if abs(error) < CENTER_THRESHOLD:
             # Mark as centered but continue tracking
             if not self.centered:
-                print(f"\n✅ Centered! (error: {error:+d} px) - Continuing to track...")
+                print(f"\n✅ Horizontally centered! (error: {error:+d} px) - Waiting 1s for clear image...")
                 self.centered = True
+                self.centering_complete_time = time.time()
             
-            # Check bottle depth for final positioning
-            bottle_depth = bottle.get('depth_m', 0)
-            if 0.48 <= bottle_depth <= 0.52:
-                print(f"🎯 BOTTLE CENTERED AND ALIGNED - Depth: {bottle_depth:.2f}m ✓        ", end='\r')
+            # Wait 1 second after centering before starting Y-axis alignment
+            current_time = time.time()
+            time_since_centered = current_time - self.centering_complete_time
+            
+            if time_since_centered < self.post_center_wait:
+                wait_remaining = self.post_center_wait - time_since_centered
+                print(f"📸 Waiting {wait_remaining:.1f}s for clear image after centering...        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(0, 0, 0)
+                return
+            
+            # Only start forward walking after horizontal centering is stable and wait period passed
+            # Check bottle Y position for forward walking
+            if cy < 250:
+                # Bottle too high (far) - walk forward
+                if not self.forward_walking:
+                    print(f"\n🚶 Walking forward - Bottle Y={cy} (target: 250-300)")
+                    self.forward_walking = True
+                    self.depth_aligned = False
+                
+                print(f"🚶 Walking forward (vx=0.2) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(0.2, 0, 0)
+            elif cy > 300:
+                # Bottle too low (close) - step backward
+                if self.forward_walking or not self.depth_aligned:
+                    print(f"\n🚶 Stepping backward - Bottle Y={cy} (target: 250-300)")
+                    self.forward_walking = False
+                    self.depth_aligned = False
+                
+                print(f"🔙 Stepping backward (vx=-0.2) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(-0.2, 0, 0)
             else:
-                print(f"📍 Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px ✓ ALIGNED (depth: {bottle_depth:.2f}m)        ", end='\r')
-            
-            # Stop movement when centered
-            if self.loco_client:
-                self.loco_client.Move(0, 0, 0)
+                # Bottle in target Y range (250-300)
+                if self.forward_walking or not self.depth_aligned:
+                    print(f"\n✅ DEPTH ALIGNED - Bottle Y={cy} ✓ (target: 250-300)")
+                    self.forward_walking = False
+                    self.depth_aligned = True
+                
+                print(f"🎯 BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
+                if self.loco_client:
+                    self.loco_client.Move(0, 0, 0)
         else:
+            # Not centered horizontally - prioritize X-axis alignment first
+            # Stop any forward walking and focus on side-stepping
+            if self.forward_walking:
+                print(f"\n⚠️  Lost horizontal alignment - stopping forward walk, resuming side-step")
+                self.forward_walking = False
+                self.depth_aligned = False
+            
             # No longer centered - resume alignment
             if self.centered:
                 print(f"\n🔄 Bottle moved - resuming side-stepping...")
