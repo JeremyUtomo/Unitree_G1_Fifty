@@ -190,8 +190,8 @@ def main():
     
     # Create single window before starting threads
     cv2.namedWindow("G1 Camera Stream", cv2.WINDOW_NORMAL)
-    # Set window to 2x size (640*2 = 1280 width for RGB + depth side by side, 480*2 = 960 height)
-    cv2.resizeWindow("G1 Camera Stream", 2560, 960)
+    # Set window size for stacked view (640 width, 480*2 = 960 height for RGB on top, depth on bottom)
+    cv2.resizeWindow("G1 Camera Stream", 640, 960)
     
     # Start stream receiver
     receiver = DualStreamReceiver(args.rgb_port, args.depth_port)
@@ -229,19 +229,21 @@ def main():
                     cv2.putText(rgb, "REC", (rgb.shape[1] - 80, 35),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                 
-                # Combine RGB and depth side-by-side
+                # Stack RGB on top and depth on bottom
                 if depth is not None:
-                    # Make sure both images have the same height
-                    if rgb.shape[0] != depth.shape[0]:
-                        depth = cv2.resize(depth, (depth.shape[1], rgb.shape[0]))
+                    # Make sure both images have the same width
+                    if rgb.shape[1] != depth.shape[1]:
+                        depth = cv2.resize(depth, (rgb.shape[1], depth.shape[0]))
                     
-                    # Add labels
-                    cv2.putText(rgb, "Detections", (10, 30),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(depth, "Depth", (10, 30),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    # Draw horizontal reference lines on RGB
+                    cv2.line(rgb, (0, 250), (rgb.shape[1], 250), (255, 0, 0), 2)
+                    cv2.line(rgb, (0, 300), (rgb.shape[1], 300), (0, 255, 0), 2)
                     
-                    combined = cv2.hconcat([rgb, depth])
+                    # Draw horizontal reference lines on depth
+                    cv2.line(depth, (0, 250), (depth.shape[1], 250), (255, 0, 0), 2)
+                    cv2.line(depth, (0, 300), (depth.shape[1], 300), (0, 255, 0), 2)
+                    
+                    combined = cv2.vconcat([rgb, depth])
                 else:
                     combined = rgb
                 

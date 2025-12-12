@@ -24,7 +24,7 @@ class VoiceController:
             self.audio_client = AudioClient()
             self.audio_client.SetTimeout(10.0)
             self.audio_client.Init()
-            self.audio_client.SetVolume(85)
+            self.audio_client.SetVolume(100)
             print("✅ Audio client initialized")
         except Exception as e:
             print(f"⚠️  Audio init failed: {e}")
