@@ -12,6 +12,7 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_, HandState
 from unitree_sdk2py.idl import default
 from unitree_sdk2py.utils.crc import CRC
 from unitree_sdk2py.utils.thread import RecurrentThread
+from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from hand_controller import HandController
 
 # Left arm joint indices
@@ -25,20 +26,29 @@ RIGHT_ARM_HOLD_POSITION = [0.294, -0.229, 0.018, 0.977, -0.132, 0.028, -0.012]
 
 # Target positions from your data
 STARTING_POSITION = [0.256, 0.280, -0.079, 0.829, 0.005, 0.012, -0.001]
-POSITION_1 = [0.844, 0.247, -0.041, -0.991, -0.305, 0.049, 0.017]
-POSITION_2 = [-0.255, 0.221, 0.312, 0.016, 0.010, 0.215, -0.087]
+POSITION_1 = [0.844, 0.247, -0.041, -0.991, -0.305, 0, 0.017]
+POSITION_2 = [-0.255, 0.221, 0.312, 0.016, 0.010, 0, -0.087]
 POSITION_3 = [-0.442, 0.004, -0.058, 0.183, -0.112, 0.002, 0.014]
+POSITION_4 = [-0.253, 0.200, 0, -0.743, 0, 0.75, 0.081]
 
 # Stage names for clarity
 STAGE_START = 0
 STAGE_POSITION_1 = 1
 STAGE_POSITION_2 = 2
 STAGE_POSITION_3 = 3
-STAGE_RETURN_TO_POSITION_1 = 4
-STAGE_RETURN_START = 5
+STAGE_POSITION_4 = 4
+STAGE_RETURN_TO_POSITION_1 = 5
+STAGE_RETURN_START = 6
 STAGE_RETURN_TO_NEUTRAL = 'return_to_neutral'  # Return to neutral position
 STAGE_RELEASE_CONTROL = 'release_control'      # Release arm SDK control
 STAGE_INTERRUPT_RETURN = 'interrupt_return'    # Interrupt handler - return to start
+
+# Put-down sequence stages
+STAGE_PUTDOWN_TO_POS3 = 'putdown_to_pos3'      # Return to Position 3
+STAGE_PUTDOWN_OPEN_HAND = 'putdown_open_hand'  # Open hand at Position 3
+STAGE_PUTDOWN_TO_POS2 = 'putdown_to_pos2'      # Move to Position 2
+STAGE_PUTDOWN_TO_POS1 = 'putdown_to_pos1'      # Move to Position 1
+STAGE_PUTDOWN_TO_START = 'putdown_to_start'    # Move to Starting position
 
 # Control parameters
 G1_NUM_MOTOR = 35
@@ -72,6 +82,11 @@ class LeftArmSequence:
         self.hand_opened = False
         self.pressure_detected = False
         self.interrupt_requested = False
+        self.position_4_hold_printed = False
+        self.put_down_requested = False
+        
+        # Loco client for FSM control
+        self.loco_client = None
         
     def Init(self):
         """Initialize publishers and hand controller"""
@@ -81,6 +96,17 @@ class LeftArmSequence:
         # Initialize hand controller
         self.hand_controller = HandController()
         self.hand_controller.init_left_hand()
+        
+        # Initialize loco client for FSM control
+        try:
+            self.loco_client = LocoClient()
+            self.loco_client.SetTimeout(10.0)
+            self.loco_client.Init()
+            time.sleep(0.5)  # Give loco client time to initialize
+            print("✅ LocoClient initialized for FSM control")
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to initialize LocoClient: {e}")
+            self.loco_client = None
         
         print("✅ Publishers initialized")
         
@@ -126,7 +152,7 @@ class LeftArmSequence:
             
         self.current_stage = STAGE_START
         self.target_positions = STARTING_POSITION.copy()
-        self.move_duration = 3.0
+        self.move_duration = 0.5
         self.start_time = time.time()
         self.is_running = True
         
@@ -147,6 +173,28 @@ class LeftArmSequence:
             self.control_thread.Stop()
         print("🛑 Sequence stopped")
     
+    def start_put_down(self):
+        """Start put-down sequence from Position 4"""
+        if not self.is_running:
+            print("❌ Error: Sequence not running")
+            return False
+        
+        if self.current_stage != STAGE_POSITION_4:
+            print(f"❌ Error: Can only put down from Position 4 (currently at stage {self.current_stage})")
+            return False
+        
+        print("🔽 Starting put-down sequence...")
+        self.put_down_requested = True
+        
+        # Use Position 4 as start position (don't capture - we're already holding it)
+        self.start_positions = POSITION_4.copy()
+        self.target_positions = POSITION_3.copy()
+        self.current_stage = STAGE_PUTDOWN_TO_POS3
+        self.move_duration = 2.0
+        self.start_time = time.time()
+        
+        return True
+    
     def graceful_stop(self):
         """Gracefully return to starting position before stopping"""
         if not self.is_running:
@@ -158,7 +206,16 @@ class LeftArmSequence:
         # Return through Position 1 to Starting Position
         print("🔄 Interrupt received - returning to starting position...")
         
-        if self.current_stage == STAGE_POSITION_3:
+        if self.current_stage == STAGE_POSITION_4:
+            # From Position 4, go to Position 1 first - capture actual positions
+            if not self._capture_current_positions():
+                # Fallback to known Position 4 if capture fails
+                self.start_positions = POSITION_4.copy()
+            self.target_positions = POSITION_1.copy()
+            self.current_stage = STAGE_RETURN_TO_POSITION_1
+            self.move_duration = 5.0  # Slower transition: 5 seconds
+            self.start_time = time.time()
+        elif self.current_stage == STAGE_POSITION_3:
             # From Position 3, go to Position 1 first - capture actual positions
             if not self._capture_current_positions():
                 # Fallback to known Position 3 if capture fails
@@ -256,7 +313,7 @@ class LeftArmSequence:
                 self.start_positions = STARTING_POSITION.copy()
                 self.target_positions = POSITION_1.copy()
                 self.current_stage = STAGE_POSITION_1
-                self.move_duration = 4.0
+                self.move_duration = 2.0
                 self.start_time = time.time()
                 print("▶️  Moving to Position 1...")
                 
@@ -265,7 +322,7 @@ class LeftArmSequence:
                 self.start_positions = POSITION_1.copy()
                 self.target_positions = POSITION_2.copy()
                 self.current_stage = STAGE_POSITION_2
-                self.move_duration = 4.0
+                self.move_duration = 2.0
                 self.start_time = time.time()
                 print("▶️  Moving to Position 2...")
                 
@@ -274,14 +331,14 @@ class LeftArmSequence:
                 if not self.hand_opened:
                     print("🖐️  Opening hand...")
                     self.hand_controller.open_left_hand()
-                    time.sleep(2.5)  # Wait for hand to open
+                    time.sleep(0.5)  # Wait for hand to open
                     self.hand_opened = True
                 
                 # Move to Position 3
                 self.start_positions = POSITION_2.copy()
                 self.target_positions = POSITION_3.copy()
                 self.current_stage = STAGE_POSITION_3
-                self.move_duration = 4.0
+                self.move_duration = 2.0
                 self.start_time = time.time()
                 print("▶️  Moving to Position 3...")
                 
@@ -315,10 +372,25 @@ class LeftArmSequence:
                 if not self.pressure_detected and not self.interrupt_requested:
                     print("⚠️  No pressure detected - hand fully closed")
                 
-                # Hold position 3 indefinitely - wait for user interrupt
+                # Move to Position 4 after grasping
                 if not self.interrupt_requested:
-                    print("✅ Position 3 reached - holding position until Ctrl+C...")
-                # Don't transition to next stage - stay in STAGE_POSITION_3
+                    self.start_positions = POSITION_3.copy()
+                    self.target_positions = POSITION_4.copy()
+                    self.current_stage = STAGE_POSITION_4
+                    self.move_duration = 2.0
+                    self.start_time = time.time()
+                    print("▶️  Moving to Position 4...")
+            
+            elif self.current_stage == STAGE_POSITION_4:
+                # Check if interrupt was requested during transition
+                if self.interrupt_requested:
+                    return  # Exit immediately, graceful_stop has already set up return path
+                
+                # Hold position 4 indefinitely - wait for user interrupt
+                if not self.interrupt_requested and not self.position_4_hold_printed:
+                    print("✅ Position 4 reached - holding position until Ctrl+C...")
+                    self.position_4_hold_printed = True
+                # Don't transition to next stage - stay in STAGE_POSITION_4
             elif self.current_stage == STAGE_RETURN_TO_POSITION_1:
                 # Return to starting position
                 self.start_positions = POSITION_1.copy()
@@ -352,9 +424,71 @@ class LeftArmSequence:
                 self.start_time = time.time()
                 print("🔓 Releasing arm control...")
             
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS3:
+                # Reached Position 3 - open hand
+                print("✅ Position 3 reached - opening hand...")
+                self.hand_controller.open_left_hand()
+                time.sleep(2.5)  # Wait for hand to open
+                
+                # Move to Position 2
+                self.start_positions = POSITION_3.copy()
+                self.target_positions = POSITION_2.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_POS2
+                self.move_duration = 2.0
+                self.start_time = time.time()
+                print("▶️  Moving to Position 2...")
+            
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS2:
+                # Close hand and move to Position 1
+                print("🤏 Closing hand...")
+                self.hand_controller.close_left_hand()
+                time.sleep(2.0)  # Wait for hand to close
+                
+                self.start_positions = POSITION_2.copy()
+                self.target_positions = POSITION_1.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_POS1
+                self.move_duration = 2.0
+                self.start_time = time.time()
+                print("▶️  Moving to Position 1...")
+            
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS1:
+                # Move to Starting position
+                self.start_positions = POSITION_1.copy()
+                self.target_positions = STARTING_POSITION.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_START
+                self.move_duration = 4.0
+                self.start_time = time.time()
+                print("▶️  Returning to starting position...")
+            
+            elif self.current_stage == STAGE_PUTDOWN_TO_START:
+                # Reached starting position - release control first, then switch FSM
+                print("✅ Reached starting position - releasing arm control...")
+                self.start_positions = STARTING_POSITION.copy()
+                self.current_stage = STAGE_RELEASE_CONTROL
+                self.move_duration = 1.0
+                self.start_time = time.time()
+            
             elif self.current_stage == STAGE_RELEASE_CONTROL:
-                # Control released - walking mode restored
-                print("✅ Walking mode restored")
+                # Control released - now switch FSM from 500 to 801
+                print("✅ Arm control released")
+                
+                if self.loco_client and self.put_down_requested:
+                    print("🔧 Switching FSM from 500 (balance) to 801 (walking)...")
+                    try:
+                        # Stop all movement first
+                        self.loco_client.Move(0, 0, 0)
+                        time.sleep(0.5)
+                        
+                        # Set FSM to 801 
+                        self.loco_client.SetFsmId(801)
+                        time.sleep(2)
+                        
+                        print("✅ Walking mode (801) active")
+                    except Exception as e:
+                        print(f"❌ Error setting FSM ID: {e}")
+                elif not self.loco_client:
+                    print("⚠️  Warning: LocoClient not available, cannot set FSM ID")
+                
                 self.stop()
 
 
@@ -362,7 +496,7 @@ def main():
     print("=" * 80)
     print("🤖 Unitree G1 - Left Arm Custom Sequence")
     print("=" * 80)
-    print("📋 Sequence: Start → Pos1 → Pos2 → Pos3 → Hand → Pos1 → Start")
+    print("📋 Sequence: Start → Pos1 → Pos2 → Pos3 → Hand → Pos4 → Hold")
     print("=" * 80)
     print("\n⚠️  SAFETY WARNING:")
     print("   - Ensure no obstacles near left arm")
@@ -420,11 +554,17 @@ def main():
         q = controller.low_state.motor_state[joint_id].q
         print(f"   {joint_names[i]:15s}: {q:7.3f}")
     
-    try:
-        input("\n▶️  Press Enter to start sequence...")
-    except KeyboardInterrupt:
-        print("\n👋 Cancelled")
-        sys.exit(0)
+    # Check if running programmatically (called from script_controller)
+    programmatic = '--no-confirm' in sys.argv
+    
+    if not programmatic:
+        try:
+            input("\n▶️  Press Enter to start sequence...")
+        except KeyboardInterrupt:
+            print("\n👋 Cancelled")
+            sys.exit(0)
+    else:
+        print("\n🤖 Starting sequence programmatically...")
         
     # Start sequence
     controller.start_sequence()

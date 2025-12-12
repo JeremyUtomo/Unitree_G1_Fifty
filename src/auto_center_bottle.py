@@ -40,7 +40,7 @@ CAN_CLASS_IDS = [39, 41, 42, 43, 44]  # bottle, cup, wine glass, mug, vase
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CENTER_X = CAMERA_WIDTH // 2
-CENTER_THRESHOLD = 35  # Pixels - larger margin for centered alignment
+CENTER_THRESHOLD = 30  # Pixels - larger margin for centered alignment
 MAX_YAW_SPEED = 0.5  # rad/s - maximum angular velocity (matches loco_client)
 MIN_YAW_SPEED = 0.03  # rad/s - extremely slow minimum speed for perfect alignment
 MIN_CONFIDENCE = 0.5  # Minimum detection confidence
@@ -153,11 +153,16 @@ class BottleCenteringController:
         self.lost_threshold = 20  # Frames without detection before considering bottle truly lost
         self.table_edge_detected = False  # Track if table edge has been detected
         self.last_step_time = 0  # Track time of last side-step for delay
-        self.step_delay = 1.0  # 1 second delay between steps
+        self.step_delay = 1  # 0.3 second delay between steps
         self.forward_walking = False  # Track if we're walking forward
         self.depth_aligned = False  # Track if depth alignment is complete
         self.centering_complete_time = 0  # Track when horizontal centering was achieved
-        self.post_center_wait = 1.0  # Wait 1 second after centering before Y-axis alignment
+        self.post_center_wait = 0.5  # Wait 0.3 second after centering before Y-axis alignment
+        self.last_mode_switch_time = 0  # Track last time we switched between side-step and forward/backward
+        self.mode_switch_delay = 1.0  # Wait 1 second when switching modes
+        self.alignment_confirmation_time = 0  # Track when full alignment was first detected
+        self.alignment_confirmation_delay = 0.1 # Wait 0.1 second to confirm alignment with clear image
+        self.alignment_confirmed = False  # Track if alignment has been confirmed and FSM switched
         
     def init(self):
         """Initialize loco client"""
@@ -181,6 +186,11 @@ class BottleCenteringController:
             self.error_history = []
             self.last_step_time = 0
             print(f"\n🎯 TABLE EDGE ALIGNED - Starting side-step alignment")
+            
+            # Set FSM ID to 500 (balance mode for side-stepping)
+            if self.loco_client:
+                print("🔧 Setting FSM ID to 500 (balance mode)")
+                self.loco_client.SetFsmId(500)
     
     def stop_centering(self):
         """Stop centering and halt robot (only called manually)"""
@@ -237,7 +247,7 @@ class BottleCenteringController:
         if abs(error) < CENTER_THRESHOLD:
             # Mark as centered but continue tracking
             if not self.centered:
-                print(f"\n✅ Horizontally centered! (error: {error:+d} px) - Waiting 1s for clear image...")
+                print(f"\n✅ Horizontally centered! (error: {error:+d} px) - Waiting 0.3s for clear image...")
                 self.centered = True
                 self.centering_complete_time = time.time()
             
@@ -257,40 +267,94 @@ class BottleCenteringController:
             if cy < 250:
                 # Bottle too high (far) - walk forward
                 if not self.forward_walking:
-                    print(f"\n🚶 Walking forward - Bottle Y={cy} (target: 250-300)")
-                    self.forward_walking = True
-                    self.depth_aligned = False
+                    # Switching from side-step/backward to forward - wait 1 second
+                    current_time = time.time()
+                    if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
+                        print(f"\n🚶 Walking forward - Bottle Y={cy} (target: 250-300)")
+                        self.forward_walking = True
+                        self.depth_aligned = False
+                        self.last_mode_switch_time = current_time
+                    else:
+                        wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
+                        print(f"⏳ Waiting {wait_remaining:.1f}s before walking forward...        ", end='\r')
+                        if self.loco_client:
+                            self.loco_client.Move(0, 0, 0)
+                        return
                 
-                print(f"🚶 Walking forward (vx=0.2) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                # Use minimum step size of 0.15 m/s
+                distance_to_target = 250 - cy
+                vx_speed = 0.15
+                
+                print(f"🚶 Walking forward (vx={vx_speed:.2f}, dist={distance_to_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
                 if self.loco_client:
-                    self.loco_client.Move(0.2, 0, 0)
+                    self.loco_client.Move(vx_speed, 0, 0)
             elif cy > 300:
                 # Bottle too low (close) - step backward
                 if self.forward_walking or not self.depth_aligned:
-                    print(f"\n🚶 Stepping backward - Bottle Y={cy} (target: 250-300)")
-                    self.forward_walking = False
-                    self.depth_aligned = False
+                    # Switching from forward/side-step to backward - wait 1 second
+                    current_time = time.time()
+                    if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
+                        print(f"\n🚶 Stepping backward - Bottle Y={cy} (target: 250-300)")
+                        self.forward_walking = False
+                        self.depth_aligned = False
+                        self.last_mode_switch_time = current_time
+                    else:
+                        wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
+                        print(f"⏳ Waiting {wait_remaining:.1f}s before stepping backward...        ", end='\r')
+                        if self.loco_client:
+                            self.loco_client.Move(0, 0, 0)
+                        return
                 
-                print(f"🔙 Stepping backward (vx=-0.2) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                # Use minimum step size of 0.15 m/s for backward
+                distance_over_target = cy - 300
+                vx_speed = -0.15
+                
+                print(f"🔙 Stepping backward (vx={vx_speed:.2f}, dist={distance_over_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
                 if self.loco_client:
-                    self.loco_client.Move(-0.2, 0, 0)
+                    self.loco_client.Move(vx_speed, 0, 0)
             else:
                 # Bottle in target Y range (250-300)
                 if self.forward_walking or not self.depth_aligned:
                     print(f"\n✅ DEPTH ALIGNED - Bottle Y={cy} ✓ (target: 250-300)")
                     self.forward_walking = False
                     self.depth_aligned = True
+                    self.alignment_confirmation_time = time.time()
                 
-                print(f"🎯 BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
-                if self.loco_client:
-                    self.loco_client.Move(0, 0, 0)
+                # Wait 3 seconds to confirm alignment with clear image
+                current_time = time.time()
+                time_since_aligned = current_time - self.alignment_confirmation_time
+                
+                if time_since_aligned < self.alignment_confirmation_delay:
+                    wait_remaining = self.alignment_confirmation_delay - time_since_aligned
+                    print(f"📸 Confirming alignment... {wait_remaining:.1f}s remaining - X={cx}, Y={cy} ✓        ", end='\r')
+                    if self.loco_client:
+                        self.loco_client.Move(0, 0, 0)
+                else:
+                    # Alignment confirmed - switch to walking mode (FSM 801)
+                    if not self.alignment_confirmed:
+                        print(f"\n✅ ALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
+                        self.alignment_confirmed = True
+                    
+                    print(f"🎯 BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
+                    if self.loco_client:
+                        self.loco_client.Move(0, 0, 0)
         else:
             # Not centered horizontally - prioritize X-axis alignment first
             # Stop any forward walking and focus on side-stepping
-            if self.forward_walking:
-                print(f"\n⚠️  Lost horizontal alignment - stopping forward walk, resuming side-step")
-                self.forward_walking = False
-                self.depth_aligned = False
+            if self.forward_walking or self.depth_aligned:
+                # Switching from forward/backward to side-step - wait 1 second
+                current_time = time.time()
+                if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
+                    print(f"\n⚠️  Lost horizontal alignment - stopping forward walk, resuming side-step")
+                    self.forward_walking = False
+                    self.depth_aligned = False
+                    self.last_mode_switch_time = current_time
+                else:
+                    wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
+                    print(f"⏳ Waiting {wait_remaining:.1f}s before resuming side-step...        ", end='\r')
+                    if self.loco_client:
+                        self.loco_client.Move(0, 0, 0)
+                    return
             
             # No longer centered - resume alignment
             if self.centered:
@@ -314,23 +378,23 @@ class BottleCenteringController:
             step_dir = -1.0 if error > 0 else 1.0
             
             # Use side-step speed (loco_client uses 0.3 for side-step)
-            vy_speed = step_dir * 0.2
+            vy_speed = step_dir * 0.15
             
             # Check if we should step or pause
             current_time = time.time()
             
             if self.last_step_time == 0:
-                # First step - wait 1 second for clear image before starting
+                # First step - wait 0.3 second for clear image before starting
                 self.last_step_time = current_time
-                print(f"\n📸 Waiting 1s for clear image before first step...")
+                print(f"\n📸 Waiting 0.3s for clear image before first step...")
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
                 return
             
             time_since_last_step = current_time - self.last_step_time
             
-            # Wait 1 second for clear image, step for 0.5 seconds, then pause for 1 second
-            initial_wait = 1.0
+            # Wait 0.3 second for clear image, step for 0.5 seconds, then pause for 0.3 second
+            initial_wait = 0.3
             step_duration = 0.5
             total_cycle = initial_wait + step_duration + self.step_delay
             
@@ -354,7 +418,7 @@ class BottleCenteringController:
             else:
                 # Start new cycle
                 self.last_step_time = current_time
-                print(f"\n📸 Waiting 1s for clear image before next step...")
+                print(f"\n📸 Waiting 0.3s for clear image before next step...")
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
     
@@ -458,6 +522,7 @@ def main():
     frame_count = 0
     last_detections = []
     auto_center_started = False
+    initial_check_done = False  # Track if we've done the initial table check
     
     try:
         while True:
@@ -567,12 +632,18 @@ def main():
                     
                     # If more than 30% of the line is yellow (table detected)
                     if yellow_count > CAMERA_WIDTH * 0.3:
-                        # Check if table depth is in edge range (0.60m - 0.65m)
-                        if 0.60 <= table_depth_m <= 0.65:
-                            if not hasattr(main, '_table_edge_detected') or not main._table_edge_detected:
-                                print(f"\n🎯 TABLE EDGE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
-                                main._table_edge_detected = True
-                                # Start side-step alignment mode
+                        # Check if table depth is in edge range (0.45m - 0.65m)
+                        if 0.45 <= table_depth_m <= 0.65:
+                            # Table edge is aligned - start centering if not already started
+                            if not auto_center_started:
+                                if frame_count <= 30:
+                                    # First 30 frames (initial check) - table already aligned at startup
+                                    print(f"\n🎯 TABLE ALREADY ALIGNED at startup (frame {frame_count}, depth: {table_depth_m:.2f}m)")
+                                else:
+                                    # Detected during runtime
+                                    print(f"\n🎯 TABLE EDGE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
+                                
+                                print("📍 Starting bottle centering immediately...")
                                 controller.set_table_edge_detected()
                                 auto_center_started = True
                         else:
@@ -586,6 +657,10 @@ def main():
                             main._table_line_detected = False
                         if hasattr(main, '_table_edge_detected'):
                             main._table_edge_detected = False
+                    
+                    # Mark initial check as done after first table analysis
+                    if not initial_check_done and frame_count >= 30:
+                        initial_check_done = True
 
             
             for det in detections:

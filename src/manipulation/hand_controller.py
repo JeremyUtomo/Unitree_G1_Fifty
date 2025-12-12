@@ -14,8 +14,8 @@ HAND_MOTOR_COUNT = 7
 
 # Hand positions (calibrated from actual robot state)
 # Order: thumb_0, thumb_1, thumb_2, middle_0, middle_1, index_0, index_1
-LEFT_HAND_OPEN = [0.645, -0.682, -0.083, -0.112, -0.038, -0.064, -0.058]
-LEFT_HAND_CLOSE = [0.645, 0.987, 1.501, -1.586, -1.758, -1.621, -1.808]
+LEFT_HAND_OPEN = [0, -0.682, -0.083, -0.112, -0.038, -0.064, -0.058]
+LEFT_HAND_CLOSE = [0, 0.987, 1.501, -1.586, -1.758, -1.621, -1.808]
 RIGHT_HAND_OPEN = [-0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5]
 RIGHT_HAND_CLOSE = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
 
