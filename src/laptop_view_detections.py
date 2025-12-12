@@ -235,6 +235,14 @@ def main():
                     if rgb.shape[1] != depth.shape[1]:
                         depth = cv2.resize(depth, (rgb.shape[1], depth.shape[0]))
                     
+                    # Draw horizontal reference lines on RGB
+                    cv2.line(rgb, (0, 250), (rgb.shape[1], 250), (255, 0, 0), 2)
+                    cv2.line(rgb, (0, 300), (rgb.shape[1], 300), (0, 255, 0), 2)
+                    
+                    # Draw horizontal reference lines on depth
+                    cv2.line(depth, (0, 250), (depth.shape[1], 250), (255, 0, 0), 2)
+                    cv2.line(depth, (0, 300), (depth.shape[1], 300), (0, 255, 0), 2)
+                    
                     combined = cv2.vconcat([rgb, depth])
                 else:
                     combined = rgb
