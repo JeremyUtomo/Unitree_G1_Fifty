@@ -505,8 +505,8 @@ def main():
     print("=" * 80)
     
     if len(sys.argv) < 2:
-        print("\nUsage: python3 arm_action.py <network_interface>")
-        print("Example: python3 arm_action.py ens33")
+        print("\nUsage: python3 arm_pick_up_bottle.py <network_interface>")
+        print("Example: python3 arm_pick_up_bottle.py ens33")
         sys.exit(1)
         
     network_interface = sys.argv[1]

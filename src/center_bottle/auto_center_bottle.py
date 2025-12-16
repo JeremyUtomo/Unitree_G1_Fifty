@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Auto-Center Bottle Detection and Rotation
 Detects bottles and rotates the G1 robot to center them in the camera view
@@ -100,7 +99,6 @@ def detect_cans(model: YOLO, image: np.ndarray, confidence_threshold: float = 0.
                 'class_name': results.names[class_id]
             })
             
-            # Draw bounding box
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.circle(annotated, (cx, cy), 5, (0, 255, 0), -1)
             
@@ -108,16 +106,12 @@ def detect_cans(model: YOLO, image: np.ndarray, confidence_threshold: float = 0.
             cv2.putText(annotated, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
-    # Draw center line (vertical X-axis alignment)
     cv2.line(annotated, (CENTER_X, 0), (CENTER_X, CAMERA_HEIGHT), (255, 0, 0), 2)
     
-    # Draw Y-position target lines (horizontal depth alignment)
-    # Y=250 - minimum target depth
     cv2.line(annotated, (0, 250), (CAMERA_WIDTH, 250), (0, 255, 255), 2)
     cv2.putText(annotated, "Y=250 (min depth)", (10, 245),
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
     
-    # Y=300 - maximum target depth
     cv2.line(annotated, (0, 300), (CAMERA_WIDTH, 300), (0, 255, 255), 2)
     cv2.putText(annotated, "Y=300 (max depth)", (10, 295),
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
@@ -171,8 +165,8 @@ class BottleCenteringController:
         self.loco_client.SetTimeout(10.0)
         self.loco_client.Init()
         time.sleep(0.5)
-        print("✅ Loco client initialized")
-        print("⚠️  Note: Robot must be in balance/stand mode for side-stepping to work")
+        print("Loco client initialized")
+        print("Note: Robot must be in balance/stand mode for side-stepping to work")
         
     def set_table_edge_detected(self):
         """Enable side-stepping alignment after table edge is detected"""
@@ -185,11 +179,10 @@ class BottleCenteringController:
             self.bottle_lost = False
             self.error_history = []
             self.last_step_time = 0
-            print(f"\n🎯 TABLE EDGE ALIGNED - Starting side-step alignment")
+            print(f"\nTABLE EDGE ALIGNED - Starting side-step alignment")
             
-            # Set FSM ID to 500 (balance mode for side-stepping)
             if self.loco_client:
-                print("🔧 Setting FSM ID to 500 (balance mode)")
+                print("Setting FSM ID to 500 (balance mode)")
                 self.loco_client.SetFsmId(500)
     
     def stop_centering(self):
@@ -198,9 +191,8 @@ class BottleCenteringController:
             self.is_centering = False
             self.centered = False
             if self.loco_client:
-                # Stop rotation by sending zero velocity instead of damping
                 self.loco_client.Move(0, 0, 0)
-            print("⚠️  Tracking stopped")
+            print("Tracking stopped")
     
     def update(self, detections):
         """Update centering based on current detections - continuously tracks bottle"""
@@ -208,34 +200,30 @@ class BottleCenteringController:
             return
         
         if not detections:
-            # Lost the bottle - stop movement immediately
             self.frames_without_detection += 1
             
             if not self.bottle_lost:
-                print(f"\n⚠️  Bottle out of frame - stopping movement")
+                print(f"\nBottle out of frame - stopping movement")
                 self.bottle_lost = True
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
             
-            print(f"⚠️  Waiting for bottle ({self.frames_without_detection} frames)        ", end='\r')
+            print(f"Waiting for bottle ({self.frames_without_detection} frames)        ", end='\r')
             return
         else:
-            # Bottle detected
             if self.bottle_lost:
-                print(f"\n✅ Bottle found again - resuming tracking")
+                print(f"\nBottle found again - resuming tracking")
                 self.bottle_lost = False
             
             self.frames_without_detection = 0
-            bottle = detections[0]  # Use first/closest detection
+            bottle = detections[0]
             
-            # Calculate the middle of the bounding box (not just top-left to bottom-right center)
             x1, y1, x2, y2 = bottle['bbox']
-            cx = (x1 + x2) // 2  # Horizontal center of bounding box
-            cy = (y1 + y2) // 2  # Vertical center of bounding box
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
             
             raw_error = cx - CENTER_X
             
-            # Smooth error using moving average
             self.error_history.append(raw_error)
             if len(self.error_history) > self.max_history:
                 self.error_history.pop(0)
@@ -243,189 +231,154 @@ class BottleCenteringController:
             error = int(sum(self.error_history) / len(self.error_history))
             self.last_known_error = error
         
-        # Check if centered horizontally (X-axis)
         if abs(error) < CENTER_THRESHOLD:
-            # Mark as centered but continue tracking
             if not self.centered:
-                print(f"\n✅ Horizontally centered! (error: {error:+d} px) - Waiting 0.3s for clear image...")
+                print(f"\nHorizontally centered! (error: {error:+d} px) - Waiting 0.3s for clear image...")
                 self.centered = True
                 self.centering_complete_time = time.time()
             
-            # Wait 1 second after centering before starting Y-axis alignment
             current_time = time.time()
             time_since_centered = current_time - self.centering_complete_time
             
             if time_since_centered < self.post_center_wait:
                 wait_remaining = self.post_center_wait - time_since_centered
-                print(f"📸 Waiting {wait_remaining:.1f}s for clear image after centering...        ", end='\r')
+                print(f"Waiting {wait_remaining:.1f}s for clear image after centering...        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
                 return
             
-            # Only start forward walking after horizontal centering is stable and wait period passed
-            # Check bottle Y position for forward walking
             if cy < 250:
-                # Bottle too high (far) - walk forward
                 if not self.forward_walking:
-                    # Switching from side-step/backward to forward - wait 1 second
                     current_time = time.time()
                     if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
-                        print(f"\n🚶 Walking forward - Bottle Y={cy} (target: 250-300)")
+                        print(f"\nWalking forward - Bottle Y={cy} (target: 250-300)")
                         self.forward_walking = True
                         self.depth_aligned = False
                         self.last_mode_switch_time = current_time
                     else:
                         wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
-                        print(f"⏳ Waiting {wait_remaining:.1f}s before walking forward...        ", end='\r')
+                        print(f"Waiting {wait_remaining:.1f}s before walking forward...        ", end='\r')
                         if self.loco_client:
                             self.loco_client.Move(0, 0, 0)
                         return
                 
-                # Use minimum step size of 0.15 m/s
                 distance_to_target = 250 - cy
                 vx_speed = 0.15
                 
-                print(f"🚶 Walking forward (vx={vx_speed:.2f}, dist={distance_to_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                print(f"Walking forward (vx={vx_speed:.2f}, dist={distance_to_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(vx_speed, 0, 0)
             elif cy > 300:
-                # Bottle too low (close) - step backward
                 if self.forward_walking or not self.depth_aligned:
-                    # Switching from forward/side-step to backward - wait 1 second
                     current_time = time.time()
                     if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
-                        print(f"\n🚶 Stepping backward - Bottle Y={cy} (target: 250-300)")
+                        print(f"\nStepping backward - Bottle Y={cy} (target: 250-300)")
                         self.forward_walking = False
                         self.depth_aligned = False
                         self.last_mode_switch_time = current_time
                     else:
                         wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
-                        print(f"⏳ Waiting {wait_remaining:.1f}s before stepping backward...        ", end='\r')
+                        print(f"Waiting {wait_remaining:.1f}s before stepping backward...        ", end='\r')
                         if self.loco_client:
                             self.loco_client.Move(0, 0, 0)
                         return
                 
-                # Use minimum step size of 0.15 m/s for backward
                 distance_over_target = cy - 300
                 vx_speed = -0.15
                 
-                print(f"🔙 Stepping backward (vx={vx_speed:.2f}, dist={distance_over_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                print(f"Stepping backward (vx={vx_speed:.2f}, dist={distance_over_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(vx_speed, 0, 0)
             else:
-                # Bottle in target Y range (250-300)
                 if self.forward_walking or not self.depth_aligned:
-                    print(f"\n✅ DEPTH ALIGNED - Bottle Y={cy} ✓ (target: 250-300)")
+                    print(f"\nDEPTH ALIGNED - Bottle Y={cy} (target: 250-300)")
                     self.forward_walking = False
                     self.depth_aligned = True
                     self.alignment_confirmation_time = time.time()
                 
-                # Wait 3 seconds to confirm alignment with clear image
                 current_time = time.time()
                 time_since_aligned = current_time - self.alignment_confirmation_time
                 
                 if time_since_aligned < self.alignment_confirmation_delay:
                     wait_remaining = self.alignment_confirmation_delay - time_since_aligned
-                    print(f"📸 Confirming alignment... {wait_remaining:.1f}s remaining - X={cx}, Y={cy} ✓        ", end='\r')
+                    print(f"Confirming alignment... {wait_remaining:.1f}s remaining - X={cx}, Y={cy}        ", end='\r')
                     if self.loco_client:
                         self.loco_client.Move(0, 0, 0)
                 else:
-                    # Alignment confirmed - switch to walking mode (FSM 801)
                     if not self.alignment_confirmed:
-                        print(f"\n✅ ALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
+                        print(f"\nALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
                         self.alignment_confirmed = True
                     
-                    print(f"🎯 BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
+                    print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
                     if self.loco_client:
                         self.loco_client.Move(0, 0, 0)
         else:
-            # Not centered horizontally - prioritize X-axis alignment first
-            # Stop any forward walking and focus on side-stepping
             if self.forward_walking or self.depth_aligned:
-                # Switching from forward/backward to side-step - wait 1 second
                 current_time = time.time()
                 if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
-                    print(f"\n⚠️  Lost horizontal alignment - stopping forward walk, resuming side-step")
+                    print(f"\nLost horizontal alignment - stopping forward walk, resuming side-step")
                     self.forward_walking = False
                     self.depth_aligned = False
                     self.last_mode_switch_time = current_time
                 else:
                     wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
-                    print(f"⏳ Waiting {wait_remaining:.1f}s before resuming side-step...        ", end='\r')
+                    print(f"Waiting {wait_remaining:.1f}s before resuming side-step...        ", end='\r')
                     if self.loco_client:
                         self.loco_client.Move(0, 0, 0)
                     return
             
-            # No longer centered - resume alignment
             if self.centered:
-                print(f"\n🔄 Bottle moved - resuming side-stepping...")
+                print(f"\nBottle moved - resuming side-stepping...")
                 self.centered = False
             
-            # Check if bottle is aligned (within threshold) before allowing step
             if abs(error) < CENTER_THRESHOLD:
-                print(f"✅ Bottle aligned (error: {error:+d} px) - no step needed        ", end='\r')
+                print(f"Bottle aligned (error: {error:+d} px) - no step needed        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
                 return
             
-            print(f"📍 Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
+            print(f"Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
             
-            # SIDE-STEP MODE: Move left/right to center bottle
-            # Positive error = bottle on right side of center line
-            # Need to step RIGHT (negative vy per loco_client.py) to bring bottle toward center
-            # Negative error = bottle on left side of center line
-            # Need to step LEFT (positive vy per loco_client.py) to bring bottle toward center
             step_dir = -1.0 if error > 0 else 1.0
-            
-            # Use side-step speed (loco_client uses 0.3 for side-step)
             vy_speed = step_dir * 0.15
-            
-            # Check if we should step or pause
             current_time = time.time()
             
             if self.last_step_time == 0:
-                # First step - wait 0.3 second for clear image before starting
                 self.last_step_time = current_time
-                print(f"\n📸 Waiting 0.3s for clear image before first step...")
+                print(f"\nWaiting 0.3s for clear image before first step...")
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
                 return
             
             time_since_last_step = current_time - self.last_step_time
             
-            # Wait 0.3 second for clear image, step for 0.5 seconds, then pause for 0.3 second
             initial_wait = 0.3
             step_duration = 0.5
             total_cycle = initial_wait + step_duration + self.step_delay
             
             if time_since_last_step < initial_wait:
-                # Initial wait for clear image
                 wait_remaining = initial_wait - time_since_last_step
-                print(f"📸 Waiting {wait_remaining:.1f}s for clear image before step...        ", end='\r')
+                print(f"Waiting {wait_remaining:.1f}s for clear image before step...        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
             elif time_since_last_step < initial_wait + step_duration:
-                # Active stepping phase
-                print(f"\n🔧 SIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
+                print(f"\nSIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
                 if self.loco_client:
                     self.loco_client.Move(0, vy_speed, 0)
             elif time_since_last_step < total_cycle:
-                # Pause phase after step
                 wait_remaining = total_cycle - time_since_last_step
-                print(f"⏳ Waiting {wait_remaining:.1f}s for stable image...        ", end='\r')
+                print(f"Waiting {wait_remaining:.1f}s for stable image...        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
             else:
-                # Start new cycle
                 self.last_step_time = current_time
-                print(f"\n📸 Waiting 0.3s for clear image before next step...")
+                print(f"\nWaiting 0.3s for clear image before next step...")
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
     
     def stop(self):
         """Stop all motion"""
         if self.loco_client:
-            # Stop movement, keep balance mode active
             self.loco_client.Move(0, 0, 0)
 
 
@@ -441,27 +394,22 @@ def main():
     ap.add_argument("--skip-frames", type=int, default=3, help="Process every Nth frame for detection")
     args = ap.parse_args()
 
-    # Load YOLO model
     print(f"Loading YOLO model: {args.model}")
     model = YOLO(args.model)
     print("Model loaded!")
 
-    # Initialize centering controller
-    print("\n🔧 Initializing robot controller...")
+    print("\nInitializing robot controller...")
     controller = BottleCenteringController(network_interface=args.network_interface)
     controller.init()
 
-    # Initialize streaming pipeline
     pipeline, src_rgb, src_depth = gst_pipeline(args.client_ip, args.width, args.height, args.fps)
 
-    # Initialize RealSense with retry logic
     cfg = rs.config()
     cfg.enable_stream(rs.stream.color, args.width, args.height, rs.format.bgr8, args.fps)
     cfg.enable_stream(rs.stream.depth, args.width, args.height, rs.format.z16, args.fps)
 
     pipe = rs.pipeline()
     
-    # Try to start camera with retries
     import subprocess
     import os
     max_retries = 3
@@ -470,12 +418,12 @@ def main():
     for attempt in range(max_retries):
         try:
             profile = pipe.start(cfg)
-            print(f"✅ Camera started successfully")
+            print(f"Camera started successfully")
             break
         except RuntimeError as e:
             error_msg = str(e)
             if ("Device or resource busy" in error_msg or "already opened" in error_msg or "No device connected" in error_msg) and attempt < max_retries - 1:
-                print(f"⚠️  Camera busy (attempt {attempt + 1}/{max_retries}), killing blocking processes...")
+                print(f"Camera busy (attempt {attempt + 1}/{max_retries}), killing blocking processes...")
                 
                 # Kill videohub aggressively and prevent restart
                 subprocess.run(["sudo", "pkill", "-9", "videohub"], stderr=subprocess.DEVNULL)
@@ -485,7 +433,6 @@ def main():
                 subprocess.run(["sudo", "systemctl", "stop", "videohub"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "systemctl", "stop", "videohub_pc4"], stderr=subprocess.DEVNULL)
                 
-                # Find and kill ALL processes using video devices
                 for vid_dev in ["/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3", "/dev/video4", "/dev/video5"]:
                     result = subprocess.run(["sudo", "fuser", vid_dev], 
                                           capture_output=True, text=True)
@@ -512,17 +459,16 @@ def main():
     temp_filter = rs.temporal_filter()
     align = rs.align(rs.stream.color)
 
-    # Start streaming
     pipeline.set_state(Gst.State.PLAYING)
     duration = Gst.util_uint64_scale_int(1, Gst.SECOND, args.fps)
 
-    print(f"\n🎥 Streaming to {args.client_ip}:5600 (RGB) and {args.client_ip}:5602 (depth)")
-    print("🔍 Waiting for table edge alignment...\n")
+    print(f"\nStreaming to {args.client_ip}:5600 (RGB) and {args.client_ip}:5602 (depth)")
+    print("Waiting for table edge alignment...\n")
 
     frame_count = 0
     last_detections = []
     auto_center_started = False
-    initial_check_done = False  # Track if we've done the initial table check
+    initial_check_done = False
     
     try:
         while True:
@@ -542,7 +488,6 @@ def main():
 
             frame_count += 1
             
-            # Run detection
             if frame_count % args.skip_frames == 0:
                 annotated_rgb, detections = detect_cans(model, colour, args.confidence)
                 last_detections = detections
@@ -550,7 +495,6 @@ def main():
                 annotated_rgb = colour.copy()
                 detections = last_detections
                 
-                # Redraw detections
                 for det in detections:
                     x1, y1, x2, y2 = det['bbox']
                     cx, cy = det['center']
@@ -564,7 +508,6 @@ def main():
                 cv2.putText(annotated_rgb, f"Bottles: {len(detections)}", (10, 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
-            # Add depth info
             for det in detections:
                 cx, cy = det['center']
                 depth_m = get_depth_at_point(depth_frame, cx, cy)
@@ -575,16 +518,12 @@ def main():
                 cv2.putText(annotated_rgb, depth_text, (x1, y1 - 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
             
-            # Auto-centering logic - only after table edge detected
             if detections and not auto_center_started:
-                # Bottle detected but waiting for table edge alignment
-                print(f"📦 Bottle detected - waiting for table edge alignment...        ", end='\r')
+                print(f"Bottle detected - waiting for table edge alignment...        ", end='\r')
             
             if controller.is_centering:
-                # Update centering control - side-step mode
                 controller.update(detections)
                 
-                # Draw centering status
                 if controller.centered:
                     status = "CENTERED - TRACKING"
                     color = (0, 255, 0)
@@ -595,60 +534,48 @@ def main():
                 cv2.putText(annotated_rgb, status, (10, 70),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             
-            # Create depth visualization with table surface detection
             depth_clip = np.clip(depth16, 0, 6000)
             depth8 = cv2.convertScaleAbs(depth_clip, alpha=255.0 / 6000.0)
             depth_bgr = cv2.applyColorMap(depth8, cv2.COLORMAP_PLASMA)
             
-            # Detect table surface (find most common depth in lower half of image)
             lower_half = depth16[CAMERA_HEIGHT//2:, :]
-            valid_depths = lower_half[(lower_half > 200) & (lower_half < 5000)]  # 0.2m to 5m range
+            valid_depths = lower_half[(lower_half > 200) & (lower_half < 5000)]
             
-            if len(valid_depths) > 100:  # Need enough samples
-                # Find the most common depth (table surface) using histogram
+            if len(valid_depths) > 100:
                 hist, bin_edges = np.histogram(valid_depths, bins=50)
                 peak_idx = np.argmax(hist)
                 table_depth = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
                 table_depth_m = table_depth / 1000.0
                 
                 
-                # Highlight table surface (within ±10cm of detected depth)
-                table_mask = np.abs(depth16.astype(float) - table_depth) < 100  # 10cm tolerance
+                table_mask = np.abs(depth16.astype(float) - table_depth) < 100
                 depth_bgr[table_mask] = cv2.addWeighted(depth_bgr[table_mask], 0.5, 
                                                         np.full_like(depth_bgr[table_mask], (0, 255, 255)), 0.5, 0)
                 
-                # Draw table depth info
                 cv2.putText(depth_bgr, f"Table: {table_depth_m:.2f}m", (10, 25),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
-                # Draw horizontal line at y=380 (80% down the image)
                 check_y = 350
                 cv2.line(depth_bgr, (0, check_y), (CAMERA_WIDTH, check_y), (255, 0, 0), 2)
                 
-                # Check if the line intersects with yellow (table) pixels
                 if check_y < CAMERA_HEIGHT:
                     line_pixels = table_mask[check_y, :]
                     yellow_count = np.sum(line_pixels)
                     
-                    # If more than 30% of the line is yellow (table detected)
                     if yellow_count > CAMERA_WIDTH * 0.3:
-                        # Check if table depth is in edge range (0.45m - 0.65m)
                         if 0.45 <= table_depth_m <= 0.65:
-                            # Table edge is aligned - start centering if not already started
                             if not auto_center_started:
                                 if frame_count <= 30:
-                                    # First 30 frames (initial check) - table already aligned at startup
-                                    print(f"\n🎯 TABLE ALREADY ALIGNED at startup (frame {frame_count}, depth: {table_depth_m:.2f}m)")
+                                    print(f"\nTABLE ALREADY ALIGNED at startup (frame {frame_count}, depth: {table_depth_m:.2f}m)")
                                 else:
-                                    # Detected during runtime
-                                    print(f"\n🎯 TABLE EDGE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
+                                    print(f"\nTABLE EDGE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
                                 
-                                print("📍 Starting bottle centering immediately...")
+                                print("Starting bottle centering immediately...")
                                 controller.set_table_edge_detected()
                                 auto_center_started = True
                         else:
                             if not hasattr(main, '_table_line_detected') or not main._table_line_detected:
-                                print(f"\n📋 TABLE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
+                                print(f"\nTABLE DETECTED at line y={check_y} (depth: {table_depth_m:.2f}m)")
                                 main._table_line_detected = True
                             if hasattr(main, '_table_edge_detected'):
                                 main._table_edge_detected = False
@@ -658,7 +585,6 @@ def main():
                         if hasattr(main, '_table_edge_detected'):
                             main._table_edge_detected = False
                     
-                    # Mark initial check as done after first table analysis
                     if not initial_check_done and frame_count >= 30:
                         initial_check_done = True
 
@@ -669,7 +595,6 @@ def main():
             
             cv2.line(depth_bgr, (CENTER_X, 0), (CENTER_X, CAMERA_HEIGHT), (255, 255, 255), 2)
 
-            # Push streams
             buf_rgb = Gst.Buffer.new_allocate(None, annotated_rgb.nbytes, None)
             buf_rgb.fill(0, annotated_rgb.tobytes())
             buf_rgb.duration = duration
@@ -681,15 +606,14 @@ def main():
             src_depth.emit("push-buffer", buf_d)
 
     except KeyboardInterrupt:
-        print("\n\n⚠️  Interrupted – shutting down...")
+        print("\n\nInterrupted – shutting down...")
     finally:
-        # Stop motion but don't damp - keep robot in standing mode
         controller.stop()
         for s in (src_rgb, src_depth):
             s.emit("end-of-stream")
         pipeline.set_state(Gst.State.NULL)
         pipe.stop()
-        print("👋 Shutdown complete - robot still in balance mode")
+        print("Shutdown complete - robot still in balance mode")
 
 
 if __name__ == "__main__":

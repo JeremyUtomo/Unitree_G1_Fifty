@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""Unitree G1 - Damp Arms Only (Keep Legs and Waist Active)
-This script sets the arms to damping mode (zero stiffness) while leaving
-the legs and waist unaffected, allowing the robot to maintain stability.
-"""
 import time
 import sys
 import signal

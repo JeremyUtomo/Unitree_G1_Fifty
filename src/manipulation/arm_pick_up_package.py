@@ -267,8 +267,8 @@ if __name__ == '__main__':
     print("="*80)
 
     if len(sys.argv) < 2:
-        print("\nUsage: python3 pick_up_arm_sequence.py <network_interface>")
-        print("Example: python3 pick_up_arm_sequence.py eth0")
+        print("\nUsage: python3 arm_pick_up_package.py <network_interface>")
+        print("Example: python3 arm_pick_up_package.py eth0")
         sys.exit(1)
 
     network_interface = sys.argv[1]

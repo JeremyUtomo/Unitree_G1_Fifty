@@ -3,7 +3,7 @@
 General-purpose wireless controller runner.
 
 Integrates:
-- Arm control (pick_up_arm_sequence.py) via F1+A and F1+X
+- Arm control (arm_pick_up_package.py) via F1+A and F1+X
 - Voice/TTS control via F1+Y
 """
 
@@ -13,7 +13,7 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscri
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 
 from custom_wireless_controller import WirelessController
-from manipulation.pick_up_arm_sequence import ArmSequence
+from manipulation.arm_pick_up_package import ArmSequence
 from manipulation.arm_stop import graceful_stop
 from vui.voice_input import VoiceController
 

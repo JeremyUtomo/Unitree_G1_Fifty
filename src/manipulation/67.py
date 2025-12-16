@@ -70,7 +70,7 @@ class ArmSequence67:
         """Start the sequence - move to 67 position."""
         with self.lock:
             if initial_low_state is None:
-                print("❌ ArmSequence67.Start: no low state provided")
+                print("ArmSequence67.Start: no low state provided")
                 return False
             
             # Record current positions
@@ -90,7 +90,7 @@ class ArmSequence67:
             name="arm_sequence_67"
         )
         self.control_thread.Start()
-        print(f"✅ Moving to Stage 1... (Cycle 1/{self.max_cycles})")
+        print(f"Moving to Stage 1... (Cycle 1/{self.max_cycles})")
         return True
 
     def Stop(self):
@@ -98,17 +98,17 @@ class ArmSequence67:
         if not self.is_running:
             return
         
-        print("🛑 Stopping arm sequence...")
+        print("Stopping arm sequence...")
         self.is_running = False
         if self.control_thread:
             self.control_thread.Stop()
-        print("✅ Stopped")
+        print("Stopped")
     
     def ReturnToStart(self):
         """Return to starting position (from pick_up_arm_sequence Stage 1)."""
         with self.lock:
             if self.low_state is None:
-                print("❌ Cannot return: no low state available")
+                print("Cannot return: no low state available")
                 return False
             
             # Record current positions
@@ -128,7 +128,7 @@ class ArmSequence67:
             name="arm_return_67"
         )
         self.control_thread.Start()
-        print("🔄 Returning to starting position...")
+        print("Returning to starting position...")
         return True
     
     def _start_release(self):
@@ -156,7 +156,7 @@ class ArmSequence67:
             name="arm_release_67"
         )
         self.control_thread.Start()
-        print("🔓 Releasing to walking mode...")
+        print("Releasing to walking mode...")
     
     def _release_loop(self):
         """Control loop for releasing control back to walking mode."""
@@ -202,9 +202,8 @@ class ArmSequence67:
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher_.Write(self.low_cmd)
         
-        # Check if release complete
         if ratio >= 1.0:
-            print("✅ Released to walking mode")
+            print("Released to walking mode")
             self.is_releasing = False
             self.is_running = False
             if self.control_thread:
@@ -262,11 +261,9 @@ class ArmSequence67:
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher_.Write(self.low_cmd)
         
-        # Check if position reached
         if ratio >= 1.0:
-            print("✅ Returned to starting position")
+            print("Returned to starting position")
             self.is_returning = False
-            # Now release to walking mode
             self._start_release()
 
     def _control_loop(self):
@@ -339,25 +336,22 @@ class ArmSequence67:
                     for i, joint_id in enumerate(RIGHT_ARM_JOINT_IDS):
                         self.current_positions_right[i] = self.low_state.motor_state[joint_id].q
             
-            # Toggle stage
             if self.current_stage == 1:
                 self.current_stage = 2
-                print(f"▶️  Moving to Stage 2... (Cycle {self.cycle_count + 1}/{self.max_cycles})")
+                print(f"Moving to Stage 2... (Cycle {self.cycle_count + 1}/{self.max_cycles})")
             else:
                 self.current_stage = 1
                 self.cycle_count += 1
                 
-                # Check if we've completed max cycles
                 if self.cycle_count >= self.max_cycles:
-                    print(f"✅ Completed {self.max_cycles} cycles. Returning to start...")
+                    print(f"Completed {self.max_cycles} cycles. Returning to start...")
                     self.Stop()
                     time.sleep(0.2)
                     self.ReturnToStart()
                     return
                 
-                print(f"▶️  Moving to Stage 1... (Cycle {self.cycle_count + 1}/{self.max_cycles})")
+                print(f"Moving to Stage 1... (Cycle {self.cycle_count + 1}/{self.max_cycles})")
             
-            # Reset timer for next movement
             self.start_time = time.time()
 
 
@@ -367,11 +361,8 @@ if __name__ == '__main__':
         print(f"Example: python3 {sys.argv[0]} eth0")
         sys.exit(1)
 
-    print("="*80)
-    print("🤖 Unitree G1 - Arm Sequence 67")
-    print("="*80)
-    print("⚠️  WARNING: Ensure no obstacles around the robot!")
-    print("="*80)
+    print("Unitree G1 - Arm Sequence 67")
+    print("WARNING: Ensure no obstacles around the robot!")
 
     network_interface = sys.argv[1]
     ChannelFactoryInitialize(0, network_interface)
@@ -384,42 +375,39 @@ if __name__ == '__main__':
     lowstate_sub = ChannelSubscriber("rt/lf/lowstate", LowState_)
     lowstate_sub.Init(arm_seq.set_low_state, 10)
 
-    print("⏳ Waiting for low state...")
+    print("Waiting for low state...")
     time.sleep(0.5)
 
     if arm_seq.low_state is None:
-        print("❌ No low state received. Exiting.")
+        print("No low state received. Exiting.")
         sys.exit(1)
 
-    # Start the sequence
     arm_seq.Start(arm_seq.low_state)
 
     try:
-        print("\n🔄 Running alternating sequence. Press Ctrl+C to stop early...\n")
+        print("\nRunning alternating sequence. Press Ctrl+C to stop early...\n")
         while arm_seq.is_running:
             time.sleep(0.1)
         
-        # After automatic completion, wait for return sequence to finish
-        print("\n⏳ Waiting for return and release sequence to complete...")
+        print("\nWaiting for return and release sequence to complete...")
         while arm_seq.is_running:
             time.sleep(0.1)
         
-        print("✅ Sequence complete!")
-        print("⏳ Closing in 5 seconds...")
+        print("Sequence complete!")
+        print("Closing in 5 seconds...")
         time.sleep(3.5)
         
     except KeyboardInterrupt:
-        print("\n\n🛑 Interrupted by user")
+        print("\n\nInterrupted by user")
         arm_seq.Stop()
         time.sleep(0.2)
         
-        # Return to starting position
         if arm_seq.ReturnToStart():
             while arm_seq.is_running:
                 time.sleep(0.1)
         time.sleep(0.3)
         
-        print("⏳ Closing in 5 seconds...")
+        print("Closing in 5 seconds...")
         time.sleep(5.0)
 
-    print("👋 Goodbye!")
+    print("Goodbye!")
