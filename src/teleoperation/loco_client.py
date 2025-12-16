@@ -18,7 +18,6 @@ except ImportError:
 
 
 def _rpc_get_int(client: LocoClient, api_id: int) -> Optional[int]:
-    """Helper to get integer value from RPC call."""
     try:
         code, data = client._Call(api_id, "{}")  # type: ignore[attr-defined]
         if code == 0 and data:
@@ -30,23 +29,19 @@ def _rpc_get_int(client: LocoClient, api_id: int) -> Optional[int]:
 
 
 def get_fsm_id(client: LocoClient) -> Optional[int]:
-    """Get current FSM ID from robot."""
     return _rpc_get_int(client, ROBOT_API_ID_LOCO_GET_FSM_ID)
 
 
 def get_fsm_mode(client: LocoClient) -> Optional[int]:
-    """Get current FSM mode from robot."""
     return _rpc_get_int(client, ROBOT_API_ID_LOCO_GET_FSM_MODE)
 
 @dataclass
 class Command:
-    """Robot movement command."""
     name: str
     id: int
     description: str = ""
 
 
-# Available movement commands
 COMMANDS = [
     Command(name="stop", id=0, description="Stop/Damp"),
     Command(name="w", id=1, description="Move forward"),
@@ -60,14 +55,12 @@ COMMANDS = [
 
 
 class LocoInterface:
-    """Interactive terminal interface for locomotion control."""
     
     def __init__(self, client: LocoClient):
         self.client = client
         self.current_command: Optional[Command] = None
 
     def show_commands(self):
-        """Display all available commands."""
         print("\n" + "="*60)
         print("Available Commands:")
         print("="*60)
@@ -76,7 +69,6 @@ class LocoInterface:
         print("="*60 + "\n")
 
     def get_command(self) -> Optional[Command]:
-        """Get command from user input."""
         input_str = input("Enter command (or 'list' for options): ").strip().lower()
 
         if input_str == "list":
@@ -86,7 +78,6 @@ class LocoInterface:
         if input_str == "exit" or input_str == "quit":
             return Command(name="exit", id=-1, description="Exit program")
 
-        # Try to match by name or ID
         try:
             input_id = int(input_str)
             for cmd in COMMANDS:
@@ -97,38 +88,37 @@ class LocoInterface:
                 if cmd.name == input_str:
                     return cmd
 
-        print(f"⚠️  Unknown command: '{input_str}'")
+        print(f"Unknown command: '{input_str}'")
         return None
 
     def execute_command(self, cmd: Command):
-        """Execute a locomotion command."""
         if cmd.id == 0:
             self.client.Damp()
-            print("🛑 Stop/Damp")
+            print("Stop/Damp")
         elif cmd.id == 1:
             self.client.Move(1, 0, 0)
-            print("⬆️  Moving forward")
+            print("Moving forward")
         elif cmd.id == 2:
             self.client.Move(-1, 0, 0)
-            print("⬇️  Moving backward")
+            print("Moving backward")
         elif cmd.id == 3:
             self.client.Move(0, 0.3, 0)
-            print("⬅️  Side step left")
+            print("Side step left")
         elif cmd.id == 4:
             self.client.Move(0, -0.3, 0)
-            print("➡️  Side step right")
+            print("Side step right")
         elif cmd.id == 5:
             self.client.Move(0, 0, 0.5)
-            print("↺  Rotating left")
+            print("Rotating left")
         elif cmd.id == 6:
             self.client.Move(0, 0, -0.5)
-            print("↻  Rotating right")
+            print("Rotating right")
         elif cmd.id == 7:
             if HANGER_BOOT_AVAILABLE:
-                print("🤸 Starting balance mode sequence...")
+                print("Starting balance mode sequence...")
                 hanger_boot_sequence(iface=sys.argv[1])
             else:
-                print("⚠️  Hanger boot sequence not available")
+                print("Hanger boot sequence not available")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -137,47 +127,41 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     print("="*80)
-    print("🤖 Unitree G1 - Locomotion Control")
+    print("Unitree G1 - Locomotion Control")
     print("="*80)
-    print("⚠️  WARNING: Ensure no obstacles around the robot!")
+    print("WARNING: Ensure no obstacles around the robot!")
     print("="*80)
     input("\nPress Enter to continue...")
 
     ChannelFactoryInitialize(0, sys.argv[1])
 
-    # Initialize loco client
     client = LocoClient()
     client.SetTimeout(10.0)
     client.Init()
     
-    print("✅ Loco client initialized")
+    print("Loco client initialized")
     
-    # Create interface
     interface = LocoInterface(client)
     interface.show_commands()
 
-    # Main control loop
     try:
         while True:
-            # Show current FSM state
             fsm_id = get_fsm_id(client)
             if fsm_id is not None:
-                print(f"📊 FSM ID: {fsm_id}")
+                print(f"FSM ID: {fsm_id}")
             
-            # Get command from user
             cmd = interface.get_command()
             
             if cmd is None:
                 continue
             
-            if cmd.id == -1:  # Exit command
-                print("\n👋 Goodbye!")
+            if cmd.id == -1:
+                print("\nGoodbye!")
                 break
             
-            # Execute command
             interface.execute_command(cmd)
             time.sleep(0.5)
             
     except KeyboardInterrupt:
-        print("\n\n🛑 Stopping...")
-        print("👋 Goodbye!")
+        print("\n\nStopping...")
+        print("Goodbye!")

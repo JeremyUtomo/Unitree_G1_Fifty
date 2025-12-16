@@ -6,11 +6,9 @@ from unitree_sdk2py.idl import default
 from unitree_sdk2py.utils.crc import CRC
 from unitree_sdk2py.utils.thread import RecurrentThread
 
-# Joint indices for arms
 LEFT_ARM_JOINT_IDS = [15, 16, 17, 18, 19, 20, 21]
 RIGHT_ARM_JOINT_IDS = [22, 23, 24, 25, 26, 27, 28]
 
-# Stage targets (copied from examples)
 TARGET_POSITIONS_1_RIGHT = [0.246, -0.281, 0.089, 0.768, 0.000, 0.000, 0.000]
 TARGET_POSITIONS_1_LEFT =  [0.246,  0.281, -0.089, 0.768,  0.000, 0.000,  0.000]
 TARGET_POSITIONS_2_RIGHT = [-0.041, -0.072, -0.120, 0.418, 0.063, -0.646, 0.400]
@@ -26,10 +24,8 @@ TARGET_POSITIONS_6_LEFT  = [-2.751,  0.491, -0.109, -0.593,  0.094, -0.161,  0.0
 TARGET_POSITIONS_7_RIGHT = [-2.751, -0.491, -0.563, -0.593, -0.094, -0.161, -0.085]
 TARGET_POSITIONS_7_LEFT  = [-2.751,  0.491, 0.563, -0.593,  0.094, -0.161,  0.085]
 
-# Number of motor slots in LowCmd
 G1_NUM_MOTOR = 29
 
-# Gains
 Kp_Arm = 40.0
 Kd_Arm = 1.0
 
@@ -188,10 +184,7 @@ class ArmSequence:
                 self.low_cmd.motor_cmd[joint_id].kp = Kp_Arm
                 self.low_cmd.motor_cmd[joint_id].kd = Kd_Arm
 
-        # Ensure WaistYaw (joint id 12) holds at 0.0 with active gains
         try:
-            # Actively hold WaistYaw (joint id 12) at 0.0
-            # Use PD gains without forcing position mode to avoid conflict with balancing controller.
             self.low_cmd.motor_cmd[12].q = 0.0
             self.low_cmd.motor_cmd[12].dq = 0.0
             self.low_cmd.motor_cmd[12].kp = 50.0
@@ -200,7 +193,6 @@ class ArmSequence:
         except Exception:
             pass
 
-        # Periodic debug info for waist position (every ~1s)
         try:
             if hasattr(self, 'loop_counter'):
                 if self.loop_counter % 50 == 0:
@@ -211,11 +203,9 @@ class ArmSequence:
         except Exception:
             pass
 
-        # Send command
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher_.Write(self.low_cmd)
 
-        # Stage transitions
         if ratio >= 1.0:
             if self.move_stage < 7:
                 self.move_stage += 1
@@ -223,7 +213,6 @@ class ArmSequence:
                 self.start_time = time.time()
                 self._update_start_positions()
             elif self.move_stage == 7:
-                # go back to stage 1 automatically
                 with self.lock:
                     if self.low_state is not None:
                         for i, joint_id in enumerate(LEFT_ARM_JOINT_IDS):
@@ -254,17 +243,13 @@ if __name__ == '__main__':
     import sys
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
     
-    print("="*80)
-    print("🤖 Unitree G1 - Manual Arm Sequence Control")
-    print("="*80)
-    print("📋 This runs the full arm sequence automatically:")
+    print("Unitree G1 - Manual Arm Sequence Control")
+    print("This runs the full arm sequence automatically:")
     print("   Stage 1 → Stage 2 → ... → Stage 7 → Return → Release")
-    print("="*80)
-    print("\n⚠️  SAFETY WARNING:")
+    print("\nSAFETY WARNING:")
     print("   - Ensure no obstacles around the robot")
     print("   - Robot must be in balancing/walking mode")
     print("   - Press Ctrl+C to emergency stop")
-    print("="*80)
 
     if len(sys.argv) < 2:
         print("\nUsage: python3 arm_pick_up_package.py <network_interface>")
@@ -274,52 +259,47 @@ if __name__ == '__main__':
     network_interface = sys.argv[1]
     ChannelFactoryInitialize(0, network_interface)
     
-    print(f"\n✅ Initialized with network interface: {network_interface}")
+    print(f"\nInitialized with network interface: {network_interface}")
     
-    # Create arm sequence instance
     arm = ArmSequence(control_dt=0.02, stage_duration=2.0)
     arm.Init()
     
-    # Subscribe to lowstate to feed arm
     def lowstate_handler(msg: LowState_):
         arm.set_low_state(msg)
     
     lowstate_sub = ChannelSubscriber("rt/lf/lowstate", LowState_)
     lowstate_sub.Init(lowstate_handler, 10)
     
-    # Wait for first state
-    print("⏳ Waiting for robot state...")
+    print("Waiting for robot state...")
     time.sleep(1.0)
     
     if arm.low_state is None:
-        print("❌ Error: No robot state received. Check network connection.")
+        print("Error: No robot state received. Check network connection.")
         sys.exit(1)
     
-    print("✅ Robot state received")
+    print("Robot state received")
     
     try:
         input("\nPress Enter to start the sequence...")
     except KeyboardInterrupt:
-        print("\n👋 Aborted.")
+        print("\nAborted.")
         sys.exit(0)
     
-    print("\n🚀 Starting sequence...")
+    print("\nStarting sequence...")
     arm.Start(arm.low_state)
     
-    # Wait a moment then trigger full sequence
     time.sleep(0.5)
-    print("▶️  Running full sequence (Stages 2-7 with auto-return)")
+    print("Running full sequence (Stages 2-7 with auto-return)")
     arm.MoveToNextStage()
     
     try:
-        # Wait for completion
         arm.is_stopped_event.wait()
-        print("\n✅ Sequence complete!")
+        print("\nSequence complete!")
         time.sleep(1.0)
     except KeyboardInterrupt:
-        print("\n\n🛑 Emergency stop requested...")
+        print("\n\nEmergency stop requested...")
         arm.Stop()
         arm.is_stopped_event.wait(timeout=10.0)
-        print("✅ Stopped safely")
+        print("Stopped safely")
     
-    print("👋 Goodbye!")
+    print("Goodbye!")
