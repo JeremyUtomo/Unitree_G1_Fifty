@@ -16,10 +16,13 @@ Unitree_G1_Fifty/
 │   ├── wireless_controller/  # Wireless controller integration
 │   ├── script_controller.py  # Main orchestrator
 │   └── requirements.txt      # Python dependencies
+├── ros2_ws/                   # ROS2 workspace for SLAM
+│   └── src/
+│       ├── FAST_LIO_LOCALIZATION2/   # FAST-LIO package
+│       └── livox_ros_driver2/        # Livox LiDAR driver
 ├── mujoco/                    # MuJoCo simulation
 ├── unitree_sdk2_python/       # Unitree SDK
-├── FAST_LIO_LOCALIZATION2/   # FAST-LIO ROS2 package
-└── livox_ros_driver2/        # Livox LiDAR driver
+└── setup_slam.sh             # SLAM workspace setup script
 ```
 
 ## Module Overview
