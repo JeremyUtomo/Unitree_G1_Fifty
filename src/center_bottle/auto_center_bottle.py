@@ -68,6 +68,59 @@ def gst_pipeline(client_ip: str, w: int, h: int, fps: int) -> tuple[Gst.Pipeline
     return pipeline, src_rgb, src_depth
 
 
+def reset_usb_device_by_product():
+    """
+    Reset RealSense camera via USB without unplugging
+    Searches for Intel RealSense device by vendor ID (8086)
+    
+    Returns:
+        True if reset successful, False otherwise
+    """
+    import subprocess
+    import fcntl
+    
+    try:
+        # Find the RealSense device - Intel vendor ID is 8086
+        result = subprocess.run(["lsusb"], capture_output=True, text=True)
+        realsense_line = None
+        for line in result.stdout.split('\n'):
+            # Search for Intel vendor ID and RealSense in device name
+            if '8086:' in line and 'intel' in line.lower():
+                print(f"Found Intel device: {line.strip()}")
+                realsense_line = line
+                break
+        
+        if not realsense_line:
+            print("Intel RealSense device not found in lsusb")
+            print("Trying to list all USB devices:")
+            print(result.stdout)
+            return False
+        
+        # Parse bus and device numbers from: "Bus 001 Device 003: ID 8086:0b64 Intel Corp."
+        parts = realsense_line.split()
+        bus_num = parts[1]
+        dev_num = parts[3].rstrip(':')
+        
+        dev_path = f"/dev/bus/usb/{bus_num}/{dev_num}"
+        print(f"Resetting USB device at {dev_path}...")
+        
+        # Open device and send reset ioctl
+        USBDEVFS_RESET = ord('U') << (4*2) | 20
+        with open(dev_path, 'wb') as f:
+            fcntl.ioctl(f, USBDEVFS_RESET, 0)
+        
+        print("USB reset successful - waiting 3s for device re-enumeration...")
+        time.sleep(3)
+        return True
+        
+    except PermissionError:
+        print("ERROR: Permission denied. Try running with sudo")
+        return False
+    except Exception as e:
+        print(f"USB reset failed: {e}")
+        return False
+
+
 def detect_cans(model: YOLO, image: np.ndarray, confidence_threshold: float = 0.5):
     """
     Detect cans in image and return annotated image with detections
@@ -409,46 +462,48 @@ def main():
     cfg.enable_stream(rs.stream.depth, args.width, args.height, rs.format.z16, args.fps)
 
     pipe = rs.pipeline()
+    ctx = rs.context()
+    
+    # Debug: Check available devices
+    print("\n=== Camera Debug Info ===")
+    devices = ctx.query_devices()
+    print(f"Number of RealSense devices found: {len(devices)}")
+    for i, dev in enumerate(devices):
+        print(f"  Device {i}: {dev.get_info(rs.camera_info.name)}")
+        print(f"    Serial: {dev.get_info(rs.camera_info.serial_number)}")
+        print(f"    Firmware: {dev.get_info(rs.camera_info.firmware_version)}")
+        print(f"    USB Type: {dev.get_info(rs.camera_info.usb_type_descriptor)}")
+    
+    if len(devices) == 0:
+        print("ERROR: No RealSense cameras detected!")
+        print("Try: sudo dmesg | tail -20  (check for USB errors)")
+        print("Try: lsusb | grep Intel  (check if camera is enumerated)")
+        sys.exit(1)
+    print("========================\n")
     
     import subprocess
     import os
     max_retries = 3
-    my_pid = os.getpid()
     
     for attempt in range(max_retries):
         try:
+            print(f"Camera start attempt {attempt + 1}/{max_retries}...")
             profile = pipe.start(cfg)
-            print(f"Camera started successfully")
+            print(f"✅ Camera started successfully")
             break
         except RuntimeError as e:
             error_msg = str(e)
-            if ("Device or resource busy" in error_msg or "already opened" in error_msg or "No device connected" in error_msg) and attempt < max_retries - 1:
-                print(f"Camera busy (attempt {attempt + 1}/{max_retries}), killing blocking processes...")
+            if ("Device or resource busy" in error_msg or "already opened" in error_msg or "No device connected" in error_msg or "No such file or directory" in error_msg) and attempt < max_retries - 1:
+                print(f"Camera busy (attempt {attempt + 1}/{max_retries}), trying USB reset...")
                 
-                # Kill videohub aggressively and prevent restart
-                subprocess.run(["sudo", "pkill", "-9", "videohub"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "killall", "-9", "videohub_pc4"], stderr=subprocess.DEVNULL)
-                
-                # Stop any systemd services that might restart videohub
-                subprocess.run(["sudo", "systemctl", "stop", "videohub"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "systemctl", "stop", "videohub_pc4"], stderr=subprocess.DEVNULL)
-                
-                for vid_dev in ["/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3", "/dev/video4", "/dev/video5"]:
-                    result = subprocess.run(["sudo", "fuser", vid_dev], 
-                                          capture_output=True, text=True)
-                    output = result.stdout + result.stderr
-                    if output:
-                        pids = output.strip().split()
-                        for pid in pids:
-                            try:
-                                pid_num = int(pid.strip())
-                                if pid_num != my_pid:  # Don't kill ourselves
-                                    print(f"  Killing PID {pid_num} using {vid_dev}")
-                                    subprocess.run(["sudo", "kill", "-9", str(pid_num)], stderr=subprocess.DEVNULL)
-                            except ValueError:
-                                pass
-                
-                time.sleep(4)
+                if reset_usb_device_by_product():
+                    print("USB reset complete, recreating pipeline...")
+                    pipe = rs.pipeline()
+                    ctx = rs.context()
+                    print("Pipeline recreated, retrying camera...")
+                else:
+                    print("USB reset failed, retrying anyway...")
+                    time.sleep(2)
             else:
                 raise
 
