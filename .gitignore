@@ -4,3 +4,34 @@ __pycache__/
 *$py.class
 *.so
 .Python
+build/
+dist/
+*.egg-info/
+venv/
+env/
+
+# ROS2 Build artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+install/
+build/
+log/
+
+# Keep ros2_ws/src/ but it only has symlinks anyway
+!ros2_ws/src/
+
+# SLAM Maps (point cloud files - too large for git)
+src/slam/maps/*.pcd
+*.pcd
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

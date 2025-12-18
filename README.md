@@ -10,13 +10,16 @@ Unitree_G1_Fifty/
 │   ├── center_bottle/         # Vision-based bottle centering
 │   ├── manipulation/          # Arm and hand manipulation
 │   ├── robot_state/          # State monitoring utilities
+│   ├── slam/                 # SLAM and autonomous navigation
 │   ├── teleoperation/        # Remote control interfaces
 │   ├── vui/                  # Voice user interface
 │   ├── wireless_controller/  # Wireless controller integration
 │   ├── script_controller.py  # Main orchestrator
 │   └── requirements.txt      # Python dependencies
 ├── mujoco/                    # MuJoCo simulation
-└── unitree_sdk2_python/       # Unitree SDK
+├── unitree_sdk2_python/       # Unitree SDK
+├── FAST_LIO_LOCALIZATION2/   # FAST-LIO ROS2 package
+└── livox_ros_driver2/        # Livox LiDAR driver
 ```
 
 ## Module Overview
@@ -109,6 +112,46 @@ python3 voice_input.py <network_interface>
 - LED control (RGB)
 - Volume control
 
+### slam/
+SLAM (Simultaneous Localization and Mapping) and autonomous navigation using FAST-LIO and Livox Mid360 LiDAR.
+
+**Structure:**
+- `map_processing/` - Map cleaning, downsampling, and optimization
+- `navigation/` - Autonomous navigation with obstacle avoidance
+- `localization/` - Robot pose estimation and tracking
+- `utilities/` - Helper scripts and diagnostics
+- `maps/` - Storage for point cloud maps (.pcd files)
+- `docs/` - Detailed documentation and guides
+
+**Key Features:**
+- Real-time LiDAR SLAM with FAST-LIO
+- Interactive RViz2 navigation (click-to-navigate)
+- A* path planning with obstacle avoidance
+- Waypoint-based navigation
+- Map processing and optimization
+
+**Quick Start:**
+```bash
+# 1. Create a map (FAST-LIO mapping)
+ros2 launch fast_lio_localization mapping.launch.py
+
+# 2. Process the map
+python3 src/slam/map_processing/clean_for_localization.py office 3.0
+
+# 3. Start localization
+ros2 launch fast_lio_localization localization_with_lidar.launch.py \
+    map:=/path/to/office_localization.pcd
+
+# 4. Navigate interactively
+python3 src/slam/navigation/rviz_navigation_obstacle_avoidance.py enp49s0 --speed 0.3
+```
+
+**Detailed Documentation:**
+See `src/slam/docs/` for:
+- `RUN_INSTRUCTIONS.md` - Complete setup and usage guide
+- `QUICK_REFERENCE.md` - Quick commands and configuration
+- `SDK_INSTALLATION.md` - SDK integration guide
+
 ### wireless_controller/
 Wireless controller integration for remote operation.
 
@@ -199,7 +242,33 @@ pip3 install -r requirements.txt
 - `ultralytics` - YOLO object detection
 - `numpy` - Numerical operations
 
-### 6. (Optional) Install MuJoCo for Simulation
+### 6. Install ROS2 and Build SLAM Workspace
+
+For SLAM and autonomous navigation capabilities:
+
+```bash
+# 1. Install ROS2 Humble
+sudo apt install ros-humble-desktop
+
+# 2. Install SLAM dependencies
+sudo apt install ros-humble-pcl-ros ros-humble-vision-opencv
+pip3 install open3d
+
+# 3. Build the SLAM workspace
+cd ~/Unitree_G1_Fifty
+source /opt/ros/humble/setup.bash
+cd ros2_ws
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DHUMBLE_ROS=humble
+
+# 4. Source the workspace (or use setup_slam.sh script)
+source ros2_ws/install/setup.bash
+# OR
+source setup_slam.sh
+```
+
+**Note:** The SLAM workspace is pre-configured in `ros2_ws/` with symbolic links to FAST_LIO_LOCALIZATION2 and livox_ros_driver2.
+
+### 7. (Optional) Install MuJoCo for Simulation
 
 ```bash
 pip3 install mujoco mujoco-python-viewer
