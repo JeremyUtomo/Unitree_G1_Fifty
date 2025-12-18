@@ -19,7 +19,9 @@ Unitree_G1_Fifty/
 ├── mujoco/                    # MuJoCo simulation
 ├── unitree_sdk2_python/       # Unitree SDK
 ├── FAST_LIO_LOCALIZATION2/   # FAST-LIO ROS2 package
-└── livox_ros_driver2/        # Livox LiDAR driver
+├── livox_ros_driver2/        # Livox LiDAR driver
+├── ros2_ws/                  # ROS2 workspace for SLAM
+└── setup_slam.sh             # SLAM workspace setup script
 ```
 
 ## Module Overview
@@ -73,6 +75,30 @@ python3 hand_pressure_monitor.py <network_interface> <left|right> [finger_id]
 python3 monitor_hand_state.py <network_interface> <left|right|both>
 python3 monitor_low_state.py <network_interface> [joint_id]
 ```
+
+### slam/
+SLAM (Simultaneous Localization and Mapping) system using FAST-LIO and Livox Mid360 LiDAR.
+
+**Setup:**
+See detailed setup instructions in `src/slam/docs/SETUP_INSTRUCTIONS.md`
+
+**Quick Start:**
+```bash
+# Source the SLAM workspace
+source setup_slam.sh
+
+# Run mapping mode
+ros2 launch fast_lio mapping.launch.py
+
+# Run localization mode
+ros2 launch fast_lio localization_with_lidar.launch.py
+```
+
+**Documentation:**
+- `SETUP_INSTRUCTIONS.md` - Complete setup guide from installation to configuration
+- `RUN_INSTRUCTIONS.md` - Operational procedures for mapping and localization
+- `QUICK_REFERENCE.md` - Command reference and common operations
+- `SDK_INSTALLATION.md` - Livox SDK installation details
 
 ### teleoperation/
 Remote control interfaces for locomotion and balance.
@@ -242,31 +268,76 @@ pip3 install -r requirements.txt
 - `ultralytics` - YOLO object detection
 - `numpy` - Numerical operations
 
-### 6. Install ROS2 and Build SLAM Workspace
+### 6. Setup SLAM (Optional)
 
-For SLAM and autonomous navigation capabilities:
+For autonomous navigation and mapping capabilities:
 
+**Complete setup guide:** See `src/slam/docs/SETUP_INSTRUCTIONS.md` for detailed instructions.
+
+**Automated setup (recommended):**
 ```bash
-# 1. Install ROS2 Humble
-sudo apt install ros-humble-desktop
-
-# 2. Install SLAM dependencies
-sudo apt install ros-humble-pcl-ros ros-humble-vision-opencv
-pip3 install open3d
-
-# 3. Build the SLAM workspace
 cd ~/Unitree_G1_Fifty
-source /opt/ros/humble/setup.bash
-cd ros2_ws
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DHUMBLE_ROS=humble
-
-# 4. Source the workspace (or use setup_slam.sh script)
-source ros2_ws/install/setup.bash
-# OR
-source setup_slam.sh
+./install_slam.sh
 ```
 
-**Note:** The SLAM workspace is pre-configured in `ros2_ws/` with symbolic links to FAST_LIO_LOCALIZATION2 and livox_ros_driver2.
+This script will automatically:
+- Install ROS2 Humble (if not present)
+- Install all system dependencies
+- Build and install Livox-SDK2
+- Clone SLAM repositories
+- Setup ROS2 workspace with symbolic links
+- Build all SLAM packages
+
+**Manual setup:**
+```bash
+# 1. Install ROS2 Humble
+sudo apt install ros-humble-desktop python3-colcon-common-extensions
+
+# 2. Install SLAM dependencies
+sudo apt install ros-humble-pcl-ros ros-humble-vision-opencv libpcl-dev libeigen3-dev
+pip3 install open3d
+
+# 3. Install Livox-SDK2
+cd /tmp
+git clone https://github.com/Livox-SDK/Livox-SDK2.git
+cd Livox-SDK2 && mkdir build && cd build
+cmake .. && make -j$(nproc) && sudo make install
+
+# 4. Clone SLAM repositories
+cd ~/Unitree_G1_Fifty
+git clone https://github.com/Ericsii/FAST_LIO_LOCALIZATION.git FAST_LIO_LOCALIZATION2
+cd FAST_LIO_LOCALIZATION2
+git checkout ROS2
+git submodule update --init --recursive
+cd ..
+
+git clone https://github.com/Livox-SDK/livox_ros_driver2.git
+cd livox_ros_driver2 && cp package_ROS2.xml package.xml && cd ..
+
+# 5. Setup workspace symbolic links
+cd ros2_ws/src
+ln -sf ../../FAST_LIO_LOCALIZATION2 FAST_LIO_LOCALIZATION2
+ln -sf ../../livox_ros_driver2 livox_ros_driver2
+cd ..
+
+# 6. Build the SLAM workspace
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install \
+    --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble \
+    --allow-overriding fast_lio livox_ros_driver2
+
+# 7. Test the installation
+source ~/Unitree_G1_Fifty/setup_slam.sh
+ros2 pkg list | grep -E "(fast_lio|livox)"
+```
+
+**Usage:**
+```bash
+source setup_slam.sh
+ros2 launch fast_lio mapping.launch.py
+```
+
+**Note:** The `setup_slam.sh` script automatically detects your workspace location - no configuration needed.
 
 ### 7. (Optional) Install MuJoCo for Simulation
 
