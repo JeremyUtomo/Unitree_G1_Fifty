@@ -1,0 +1,9 @@
+free_thresh: 0.196
+image: hollander_2d.pgm
+negate: 0
+occupied_thresh: 0.65
+origin:
+- -29.038421630859375
+- -32.63016319274902
+- 0.0
+resolution: 0.05
