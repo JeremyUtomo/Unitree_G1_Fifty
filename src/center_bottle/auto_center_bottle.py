@@ -204,7 +204,7 @@ class BottleCenteringController:
         self.forward_walking = False  # Track if we're walking forward
         self.depth_aligned = False  # Track if depth alignment is complete
         self.centering_complete_time = 0  # Track when horizontal centering was achieved
-        self.post_center_wait = 0.5  # Wait 0.3 second after centering before Y-axis alignment
+        self.post_center_wait = 1  # Wait 0.3 second after centering before Y-axis alignment
         self.last_mode_switch_time = 0  # Track last time we switched between side-step and forward/backward
         self.mode_switch_delay = 1.0  # Wait 1 second when switching modes
         self.alignment_confirmation_time = 0  # Track when full alignment was first detected
@@ -316,12 +316,18 @@ class BottleCenteringController:
                         return
                 
                 distance_to_target = 250 - cy
-                vx_speed = 0.15
+                vx_speed = 0.2
                 
                 print(f"Walking forward (vx={vx_speed:.2f}, dist={distance_to_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(vx_speed, 0, 0)
+                return
             elif cy > 300:
+                # Reset alignment state if bottle moved too far
+                if self.depth_aligned:
+                    print(f"\nBottle moved too far - resetting depth alignment")
+                    self.depth_aligned = False
+                
                 if self.forward_walking or not self.depth_aligned:
                     current_time = time.time()
                     if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
@@ -337,11 +343,12 @@ class BottleCenteringController:
                         return
                 
                 distance_over_target = cy - 300
-                vx_speed = -0.15
+                vx_speed = -0.2
                 
                 print(f"Stepping backward (vx={vx_speed:.2f}, dist={distance_over_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(vx_speed, 0, 0)
+                return
             else:
                 if self.forward_walking or not self.depth_aligned:
                     print(f"\nDEPTH ALIGNED - Bottle Y={cy} (target: 250-300)")
@@ -363,9 +370,13 @@ class BottleCenteringController:
                         print(f"ALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
                         self.alignment_confirmed = True
                     
-                    print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
+                    print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓")
                     if self.loco_client:
                         self.loco_client.Move(0, 0, 0)
+                    
+                    # Terminate script after full alignment
+                    print("\nAlignment complete - terminating script")
+                    return True  # Signal to exit main loop
         else:
             if self.forward_walking or self.depth_aligned:
                 current_time = time.time()
@@ -394,7 +405,7 @@ class BottleCenteringController:
             print(f"Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
             
             step_dir = -1.0 if error > 0 else 1.0
-            vy_speed = step_dir * 0.15
+            vy_speed = step_dir * 0.2
             current_time = time.time()
             
             if self.last_step_time == 0:
@@ -445,7 +456,7 @@ def main():
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--confidence", type=float, default=0.5, help="Detection confidence threshold")
     ap.add_argument("--model", type=str, default="yolov8n.pt", help="YOLO model path")
-    ap.add_argument("--skip-frames", type=int, default=3, help="Process every Nth frame for detection")
+    ap.add_argument("--skip-frames", type=int, default=1, help="Process every Nth frame for detection")
     args = ap.parse_args()
 
     print(f"Loading YOLO model: {args.model}")
@@ -578,7 +589,10 @@ def main():
                 print(f"Bottle detected - waiting for table edge alignment...        ", end='\r')
             
             if controller.is_centering:
-                controller.update(detections)
+                should_exit = controller.update(detections)
+                if should_exit:
+                    print("Alignment complete - exiting program")
+                    break
                 
                 if controller.centered:
                     status = "CENTERED - TRACKING"
