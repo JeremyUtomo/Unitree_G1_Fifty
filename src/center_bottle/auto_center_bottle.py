@@ -22,11 +22,6 @@ import cv2
 import pyrealsense2 as rs
 from ultralytics import YOLO
 
-# ROS2
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import Bool
-
 # Unitree SDK
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
@@ -364,19 +359,9 @@ class BottleCenteringController:
                         self.loco_client.Move(0, 0, 0)
                 else:
                     if not self.alignment_confirmed:
-                        print(f"\nALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
+                        print(f"\n✓✓✓ BOTTLE_ALIGNED ✓✓✓")
+                        print(f"ALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
                         self.alignment_confirmed = True
-                        
-                        # Publish alignment status to ROS2 topic
-                        msg = Bool()
-                        msg.data = True
-                        self.alignment_publisher.publish(msg)
-                        self.get_logger().info('Published alignment status: True')
-                    
-                    # Continue publishing alignment status every frame
-                    msg = Bool()
-                    msg.data = True
-                    self.alignment_publisher.publish(msg)
                     
                     print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓        ", end='\r')
                     if self.loco_client:
@@ -594,9 +579,6 @@ def main():
             
             if controller.is_centering:
                 controller.update(detections)
-                
-                # Process ROS2 callbacks to publish messages
-                rclpy.spin_once(controller, timeout_sec=0)
                 
                 if controller.centered:
                     status = "CENTERED - TRACKING"
