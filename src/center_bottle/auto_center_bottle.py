@@ -187,15 +187,10 @@ def get_depth_at_point(depth_frame, x: int, y: int) -> float:
     return depth_frame.get_distance(x, y)
 
 
-class BottleCenteringController(Node):
+class BottleCenteringController:
     """Controls robot side-stepping to center detected bottles after table edge alignment"""
     
     def __init__(self, network_interface='eth0'):
-        super().__init__('bottle_centering_controller')
-        
-        # ROS2 publisher for alignment status
-        self.alignment_publisher = self.create_publisher(Bool, '/bottle_alignment_status', 10)
-        
         self.loco_client = None
         self.network_interface = network_interface
         self.is_centering = False
