@@ -92,10 +92,10 @@ See detailed setup instructions in `src/slam/docs/SETUP_INSTRUCTIONS.md`
 source setup_slam.sh
 
 # Run mapping mode
-ros2 launch fast_lio mapping.launch.py
+ros2 launch fast_lio_localization mapping.launch.py
 
 # Run localization mode
-ros2 launch fast_lio localization_with_lidar.launch.py
+ros2 launch fast_lio_localization localization_with_lidar.launch.py
 ```
 
 **Documentation:**
@@ -338,7 +338,7 @@ ros2 pkg list | grep -E "(fast_lio|livox)"
 **Usage:**
 ```bash
 source setup_slam.sh
-ros2 launch fast_lio mapping.launch.py
+ros2 launch fast_lio_localization mapping.launch.py
 ```
 
 **Note:** The `setup_slam.sh` script automatically detects your workspace location - no configuration needed.

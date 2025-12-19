@@ -157,8 +157,30 @@ def main():
     map_name = sys.argv[1]
     min_distance = float(sys.argv[2]) if len(sys.argv) > 2 else 3.0
     
-    # Paths
-    pcd_dir = "src/FAST_LIO_LOCALIZATION2/PCD"
+    # Find PCD directory dynamically
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    slam_dir = os.path.dirname(script_dir)  # slam folder
+    src_dir = os.path.dirname(slam_dir)  # src folder
+    workspace_dir = os.path.dirname(src_dir)  # repo root
+    
+    # Try multiple possible locations for PCD directory
+    pcd_locations = [
+        os.path.join(workspace_dir, "ros2_ws", "src", "FAST_LIO_LOCALIZATION2", "PCD"),
+        os.path.join(workspace_dir, "FAST_LIO_LOCALIZATION2", "PCD"),
+        os.path.join(workspace_dir, "src", "FAST_LIO_LOCALIZATION2", "PCD"),
+    ]
+    
+    pcd_dir = None
+    for location in pcd_locations:
+        if os.path.exists(location):
+            pcd_dir = location
+            break
+    
+    if pcd_dir is None:
+        # Default to ros2_ws location and create it
+        pcd_dir = pcd_locations[0]
+        os.makedirs(pcd_dir, exist_ok=True)
+    
     output_file = os.path.join(pcd_dir, f"{map_name}_localization.pcd")
     
     print("\n" + "=" * 60)
@@ -182,7 +204,7 @@ def main():
     print(f"\nClean map: {output_file}")
     print(f"\nUse this map for localization:")
     print(f"  ros2 launch fast_lio_localization localization_with_lidar.launch.py \\")
-    print(f"      map:=/home/goon/Documents/GitHub/Unitree-g1-LiDAR-SLAM/{output_file}")
+    print(f"      map:={os.path.abspath(output_file)}")
 
 
 if __name__ == "__main__":

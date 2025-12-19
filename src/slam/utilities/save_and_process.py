@@ -168,8 +168,29 @@ def save_and_process_map(map_name, height_threshold=1.0, voxel_size=0.1, collect
         collect_duration: How long to collect (seconds), 0=until Ctrl+C
         min_distance: Minimum distance filter (meters), filters close obstructions
     """
-    workspace_dir = "/home/goon/Documents/GitHub/Unitree-g1-LiDAR-SLAM"
-    pcd_dir = f"{workspace_dir}/src/FAST_LIO_LOCALIZATION2/PCD"
+    # Find workspace root dynamically (go up from slam/utilities to repo root)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    slam_dir = os.path.dirname(script_dir)  # slam folder
+    src_dir = os.path.dirname(slam_dir)  # src folder
+    workspace_dir = os.path.dirname(src_dir)  # repo root
+    
+    # Try multiple possible locations for PCD directory
+    pcd_locations = [
+        os.path.join(workspace_dir, "ros2_ws", "src", "FAST_LIO_LOCALIZATION2", "PCD"),
+        os.path.join(workspace_dir, "FAST_LIO_LOCALIZATION2", "PCD"),
+        os.path.join(workspace_dir, "src", "FAST_LIO_LOCALIZATION2", "PCD"),
+    ]
+    
+    pcd_dir = None
+    for location in pcd_locations:
+        if os.path.exists(location):
+            pcd_dir = location
+            break
+    
+    if pcd_dir is None:
+        # Default to ros2_ws location and create it
+        pcd_dir = pcd_locations[0]
+        os.makedirs(pcd_dir, exist_ok=True)
     
     raw_map_path = f"{pcd_dir}/{map_name}_raw.pcd"
     clean_map_path = f"{pcd_dir}/{map_name}.pcd"
@@ -208,8 +229,8 @@ def save_and_process_map(map_name, height_threshold=1.0, voxel_size=0.1, collect
         sys.exit(1)
     
     try:
-        # Activate venv and run process_map.py
-        cmd = f"source {workspace_dir}/venv/bin/activate && python3 {process_script} {raw_map_path} {clean_map_path} {height_threshold} {voxel_size}"
+        # Run process_map.py directly (no venv needed)
+        cmd = f"python3 {process_script} {raw_map_path} {clean_map_path} {height_threshold} {voxel_size}"
         
         result = subprocess.run(
             ["bash", "-c", cmd],

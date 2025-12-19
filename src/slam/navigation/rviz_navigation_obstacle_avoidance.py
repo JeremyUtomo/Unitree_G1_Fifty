@@ -11,9 +11,6 @@ Examples:
 """
 
 import sys
-# Add venv AFTER ROS2 packages so ROS2 imports work first
-sys.path.append('/home/goon/Documents/GitHub/Unitree-g1-LiDAR-SLAM/venv/lib/python3.10/site-packages')
-
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry, Path
