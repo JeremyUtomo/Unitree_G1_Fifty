@@ -468,9 +468,6 @@ def main():
     ap.add_argument("--skip-frames", type=int, default=3, help="Process every Nth frame for detection")
     args = ap.parse_args()
 
-    # Initialize ROS2
-    rclpy.init()
-
     print(f"Loading YOLO model: {args.model}")
     model = YOLO(args.model)
     print("Model loaded!")
@@ -695,8 +692,6 @@ def main():
             s.emit("end-of-stream")
         pipeline.set_state(Gst.State.NULL)
         pipe.stop()
-        controller.destroy_node()
-        rclpy.shutdown()
         print("Shutdown complete - robot still in balance mode")
 
 
