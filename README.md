@@ -30,18 +30,48 @@ Unitree_G1_Fifty/
 
 ## Module Overview
 
+### 🚀 Integrated Controller (NEW!)
+**Complete autonomous pick-and-place with navigation**
+
+Orchestrates a full 5-phase sequence:
+1. Navigate to first goal (RViz)
+2. Auto-center bottle (SSH to robot)
+3. Pick up bottle
+4. Navigate to second goal (RViz)
+5. Put down bottle → FSM 801
+
+**Quick Start:**
+```bash
+# 1. Check prerequisites
+./check_prerequisites.sh enp49s0
+
+# 2. Start FAST-LIO localization
+source setup_slam.sh
+ros2 launch fast_lio_localization localization_with_lidar.launch.py map:=/path/to/map.pcd
+
+# 3. Run integrated controller
+python3 src/integrated_controller.py enp49s0
+```
+
+**Documentation:**
+- `src/INTEGRATED_CONTROLLER.md` - Complete guide
+- `src/SSH_SETUP.md` - SSH key configuration
+
 ### center_bottle/
 Vision-based bottle detection and centering using YOLO and RealSense camera.
 
 **Files:**
-- `auto_center_bottle.py` - Automated bottle centering controller
+- `auto_center_bottle.py` - Automated bottle centering controller (with ROS2 topic)
 - `laptop_view_detections.py` - Stream viewer for detections
 
 **Usage:**
 ```bash
-python3 auto_center_bottle.py <network_interface> <camera_topic>
+python3 auto_center_bottle.py --client-ip 192.168.123.222 --network-interface eth0
 python3 laptop_view_detections.py <rtsp_url>
 ```
+
+**ROS2 Topic:**
+- `/bottle_alignment_status` (std_msgs/Bool) - Published when bottle is fully aligned
 
 ### manipulation/
 Arm and hand control sequences for manipulation tasks.

@@ -301,6 +301,13 @@ class ObstacleAvoidanceNavigator(Node):
         self.safety_max_distance = 0.60  # 60cm maximum
         self.obstacle_detected = False
         self.last_obstacle_check_time = time.time()
+        self.safety_stop_enabled = True  # Can be disabled when near goal
+        self.goal_safety_distance = 0.80  # Disable safety within 80cm of goal
+        
+        # Track starting position for second goal
+        self.second_goal_start_x = None
+        self.second_goal_start_y = None
+        self.second_goal_distance_threshold = 0.80  # Re-enable safety after 80cm travel
         
         # Subscribe to odometry
         self.create_subscription(Odometry, '/Odometry', self.odom_callback, 10)
@@ -429,6 +436,20 @@ class ObstacleAvoidanceNavigator(Node):
         q = msg.pose.orientation
         self.goal_yaw = self.quaternion_to_yaw(q.x, q.y, q.z, q.w)
         
+        # If this is a second goal (already had a goal before), save starting position
+        # and initially disable safety stop
+        if self.has_goal:
+            print("\nSecond goal detected - saving start position for safety re-enable")
+            self.second_goal_start_x = self.current_x
+            self.second_goal_start_y = self.current_y
+            self.safety_stop_enabled = False
+            print(f"Safety stop DISABLED initially for second goal (will re-enable after 80cm travel)")
+        else:
+            # First goal - reset second goal tracking
+            self.second_goal_start_x = None
+            self.second_goal_start_y = None
+            self.safety_stop_enabled = True
+        
         print(f"\nNew goal: ({self.goal_x:.2f}, {self.goal_y:.2f}) heading {math.degrees(self.goal_yaw):.1f}°")
         print("Planning path with obstacle avoidance...")
         
@@ -472,16 +493,38 @@ class ObstacleAvoidanceNavigator(Node):
         if not self.has_goal or self.current_x is None:
             return
         
-        # SAFETY CHECK: Stop if obstacle detected nearby
-        if self.obstacle_detected:
-            self.send_velocity(0.0, 0.0, 0.0)
-            return
-        
-        # Check if reached final goal
+        # Calculate distance to goal
         distance_to_goal = math.sqrt(
             (self.goal_x - self.current_x) ** 2 +
             (self.goal_y - self.current_y) ** 2
         )
+        
+        # SAFETY STOP MANAGEMENT
+        # Disable safety stop when within 80cm of goal
+        if distance_to_goal < self.goal_safety_distance:
+            if self.safety_stop_enabled:
+                print(f"\n  Safety stop DISABLED - within {distance_to_goal*100:.0f}cm of goal (< 80cm)")
+                self.safety_stop_enabled = False
+        
+        # For second goal: re-enable safety stop after traveling 80cm from start
+        if self.second_goal_start_x is not None:
+            distance_from_start = math.sqrt(
+                (self.current_x - self.second_goal_start_x) ** 2 +
+                (self.current_y - self.second_goal_start_y) ** 2
+            )
+            if distance_from_start > self.second_goal_distance_threshold and not self.safety_stop_enabled:
+                print(f"\n  Safety stop RE-ENABLED - traveled {distance_from_start*100:.0f}cm from second goal start (> 80cm)")
+                self.safety_stop_enabled = True
+                # Clear the second goal start tracking
+                self.second_goal_start_x = None
+                self.second_goal_start_y = None
+        
+        # SAFETY CHECK: Stop if obstacle detected nearby (only if safety stop is enabled)
+        if self.safety_stop_enabled and self.obstacle_detected:
+            self.send_velocity(0.0, 0.0, 0.0)
+            return
+        
+        # Check if reached final goal
         
         if distance_to_goal < self.goal_tolerance:
             # Align to goal orientation
