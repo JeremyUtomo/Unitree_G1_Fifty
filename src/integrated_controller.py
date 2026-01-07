@@ -202,22 +202,12 @@ class IntegratedController(Node):
         print("PHASE 2: Auto-Center Bottle (via SSH)")
         print("="*60)
         
-        # Switch to FSM 500 (balance mode) for centering
-        print("\nSwitching FSM to 500 (balance mode) for bottle centering...")
-        if self.loco_client is None:
-            ChannelFactoryInitialize(0, self.network_interface)
-            self.loco_client = LocoClient()
-            self.loco_client.SetTimeout(10.0)
-            self.loco_client.Init()
-            time.sleep(0.5)
-        
-        self.loco_client.SetFsmId(500)
-        print("✓ FSM switched to 500")
-        time.sleep(1.0)  # Give FSM time to switch
+        # Note: auto_center_bottle.py will switch to FSM 500 itself
+        # when table edge is detected
         
         robot_host = "unitree@192.168.123.164"
         robot_script = "/home/unitree/Unitree_G1_Fifty/src/center_bottle/auto_center_bottle.py"
-        robot_network_interface = "eth0"  # Robot uses eth0, not the laptop's interface
+        robot_network_interface = "eth0"  # Robot uses eth0
         
         print(f"\nConnecting to robot via SSH: {robot_host}")
         print(f"Running: {robot_script} --network-interface {robot_network_interface}\n")
@@ -516,6 +506,10 @@ class IntegratedController(Node):
                 print("\n✗ Phase 1 failed")
                 return False
             
+            # Wait for robot to finish final rotation alignment
+            print("\nWaiting 2 seconds for robot to stabilize after rotation...")
+            time.sleep(2.0)
+            
             # Phase 2: Auto-center bottle
             self.current_phase = 2
             if not self.phase2_auto_center_bottle():
@@ -533,6 +527,10 @@ class IntegratedController(Node):
             if not self.phase4_navigate_to_second_goal():
                 print("\n✗ Phase 4 failed")
                 return False
+            
+            # Wait for robot to finish final rotation alignment
+            print("\nWaiting 2 seconds for robot to stabilize after rotation...")
+            time.sleep(2.0)
             
             # Phase 5: Put down
             self.current_phase = 5
@@ -573,7 +571,7 @@ class IntegratedController(Node):
                 subprocess.run(kill_cmd, timeout=2)
                 time.sleep(1)  # Give remote script time to cleanup
                 
-                # Now terminate the SSH process
+                # Terminate the SSH process
                 print("Terminating SSH connection...")
                 self.ssh_process.terminate()
                 self.ssh_process.wait(timeout=3)
@@ -600,7 +598,7 @@ class IntegratedController(Node):
                 self.nav_process.kill()
     
     def cleanup(self):
-        """Clean up resources - handle arm gracefully if holding bottle"""
+        "Clean up resources"
         print("\nCleaning up...")
         
         # If arm is active and holding bottle (Phase 3 complete, Phase 5 not complete)

@@ -30,7 +30,7 @@ Unitree_G1_Fifty/
 
 ## Module Overview
 
-### 🚀 Integrated Controller (NEW!)
+### Integrated Controller
 **Complete autonomous pick-and-place with navigation**
 
 Orchestrates a full 5-phase sequence:

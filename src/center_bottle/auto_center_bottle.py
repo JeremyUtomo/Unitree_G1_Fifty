@@ -209,7 +209,7 @@ class BottleCenteringController:
         self.mode_switch_delay = 1.0  # Wait 1 second when switching modes
         self.alignment_confirmation_time = 0  # Track when full alignment was first detected
         self.alignment_confirmation_delay = 0.1 # Wait 0.1 second to confirm alignment with clear image
-        self.alignment_confirmed = False  # Track if alignment has been confirmed and FSM switched
+        self.alignment_confirmed = False  # Track if alignment has been confirmed
         
     def init(self):
         """Initialize loco client"""
@@ -234,9 +234,10 @@ class BottleCenteringController:
             self.last_step_time = 0
             print(f"\nTABLE EDGE ALIGNED - Starting side-step alignment")
             
-            if self.loco_client:
-                print("Setting FSM ID to 500 (balance mode)")
-                self.loco_client.SetFsmId(500)
+            # Note: Robot should already be in FSM 801 from navigation
+            # Side-stepping works in FSM 801, no need to switch to FSM 500
+            # Switching FSM modes causes unwanted 180-degree rotation
+            print("Starting centering (robot remains in current FSM mode)")
     
     def stop_centering(self):
         """Stop centering and halt robot (only called manually)"""
@@ -367,7 +368,7 @@ class BottleCenteringController:
                 else:
                     if not self.alignment_confirmed:
                         print(f"\n✓✓✓ BOTTLE_ALIGNED ✓✓✓")
-                        print(f"ALIGNMENT CONFIRMED - Setting FSM ID to 801 (walking mode)")
+                        print(f"ALIGNMENT CONFIRMED")
                         self.alignment_confirmed = True
                     
                     print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓")

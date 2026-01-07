@@ -92,11 +92,11 @@ timeout = 120.0                   # Alignment timeout (seconds)
 
 ## Success Indicators
 
-✅ Phase 1: "First goal reached!"
-✅ Phase 2: "Bottle alignment confirmed!"
-✅ Phase 3: "Bottle grasped at Position 4!"
-✅ Phase 4: "Second goal reached!"
-✅ Phase 5: "FSM ID set to 801"
+Phase 1: "First goal reached!"
+Phase 2: "Bottle alignment confirmed!"
+Phase 3: "Bottle grasped at Position 4!"
+Phase 4: "Second goal reached!"
+Phase 5: "FSM ID set to 801"
 
 ---
 
