@@ -17,20 +17,31 @@ RIGHT_ARM_HOLD_POSITION = [0.294, -0.229, 0.018, 0.977, -0.132, 0.028, -0.012]
 STARTING_POSITION = [0.256, 0.280, -0.079, 0.829, 0.005, 0.012, -0.001]
 POSITION_1 = [0.844, 0.247, -0.041, -0.991, -0.305, 0, 0.017]
 POSITION_2 = [-0.255, 0.221, 0.312, 0.016, 0.010, 0, -0.087]
-POSITION_3 = [-0.442, 0.004, -0.058, 0.183, -0.112, 0.002, 0.014]
-POSITION_4 = [-0.253, 0.200, 0, -0.743, 0, 0.75, 0.081]
+# 4-position sequence for approach (hand closes at 3D)
+POSITION_3A = [-0.243, 0.198, 0.215, 0.182, -0.148, 0.085, -0.172]
+POSITION_3B = [-0.259, 0.015, 0.027, 0.183, -0.029, 0.031, 0.053]
+POSITION_3C = [-0.295, -0.067, -0.171, 0.292, 0.006, -0.025, 0.279]
+POSITION_3D = [-0.405, -0.111, -0.472, 0.450, -0.108, -0.113, 0.574]
+# Hold position (lift with bottle)
+POSITION_7 = [-0.253, 0.200, 0, -0.743, 0, 0.75, 0.081]
 
 STAGE_START = 0
 STAGE_POSITION_1 = 1
 STAGE_POSITION_2 = 2
-STAGE_POSITION_3 = 3
-STAGE_POSITION_4 = 4
+STAGE_POSITION_3A = '3a'
+STAGE_POSITION_3B = '3b'
+STAGE_POSITION_3C = '3c'
+STAGE_POSITION_3D = '3d'
+STAGE_POSITION_7 = 7
 STAGE_RETURN_TO_POSITION_1 = 5
 STAGE_RETURN_START = 6
 STAGE_RETURN_TO_NEUTRAL = 'return_to_neutral'
 STAGE_RELEASE_CONTROL = 'release_control'
 STAGE_INTERRUPT_RETURN = 'interrupt_return'
-STAGE_PUTDOWN_TO_POS3 = 'putdown_to_pos3'
+STAGE_PUTDOWN_TO_POS3D = 'putdown_to_pos3d'
+STAGE_PUTDOWN_TO_POS3C = 'putdown_to_pos3c'
+STAGE_PUTDOWN_TO_POS3B = 'putdown_to_pos3b'
+STAGE_PUTDOWN_TO_POS3A = 'putdown_to_pos3a'
 STAGE_PUTDOWN_OPEN_HAND = 'putdown_open_hand'
 STAGE_PUTDOWN_TO_POS2 = 'putdown_to_pos2'
 STAGE_PUTDOWN_TO_POS1 = 'putdown_to_pos1'
@@ -65,6 +76,7 @@ class LeftArmSequence:
         self.lock = threading.Lock()
         
         self.hand_opened = False
+        self.hand_closed_at_3f = False
         self.pressure_detected = False
         self.interrupt_requested = False
         self.position_4_hold_printed = False
@@ -154,20 +166,20 @@ class LeftArmSequence:
         print("Sequence stopped")
     
     def start_put_down(self):
-        """Start put-down sequence from Position 4"""
+        """Start put-down sequence from Position 7"""
         if not self.is_running:
             print("Error: Sequence not running")
             return False
         
-        if self.current_stage != STAGE_POSITION_4:
-            print(f"Error: Can only put down from Position 4 (currently at stage {self.current_stage})")
+        if self.current_stage != STAGE_POSITION_7:
+            print(f"Error: Can only put down from Position 7 (currently at stage {self.current_stage})")
             return False
         
         print("Starting put-down sequence...")
         self.put_down_requested = True
-        self.start_positions = POSITION_4.copy()
-        self.target_positions = POSITION_3.copy()
-        self.current_stage = STAGE_PUTDOWN_TO_POS3
+        self.start_positions = POSITION_7.copy()
+        self.target_positions = POSITION_3D.copy()
+        self.current_stage = STAGE_PUTDOWN_TO_POS3D
         self.move_duration = 2.0
         self.start_time = time.time()
         
@@ -182,16 +194,17 @@ class LeftArmSequence:
         
         print("Interrupt received - returning to starting position...")
         
-        if self.current_stage == STAGE_POSITION_4:
+        if self.current_stage == STAGE_POSITION_7:
             if not self._capture_current_positions():
-                self.start_positions = POSITION_4.copy()
+                self.start_positions = POSITION_7.copy()
             self.target_positions = POSITION_1.copy()
             self.current_stage = STAGE_RETURN_TO_POSITION_1
             self.move_duration = 5.0
             self.start_time = time.time()
-        elif self.current_stage == STAGE_POSITION_3:
+        elif self.current_stage in [STAGE_POSITION_3A, STAGE_POSITION_3B, STAGE_POSITION_3C, 
+                                     STAGE_POSITION_3D]:
             if not self._capture_current_positions():
-                self.start_positions = POSITION_3.copy()
+                self.start_positions = POSITION_3A.copy()
             self.target_positions = POSITION_1.copy()
             self.current_stage = STAGE_RETURN_TO_POSITION_1
             self.move_duration = 5.0
@@ -291,63 +304,93 @@ class LeftArmSequence:
                     time.sleep(0.5)  # Wait for hand to open
                     self.hand_opened = True
                 
-                # Move to Position 3
+                # Move to Position 3A (first of 6 approach positions)
                 self.start_positions = POSITION_2.copy()
-                self.target_positions = POSITION_3.copy()
-                self.current_stage = STAGE_POSITION_3
-                self.move_duration = 2.0
+                self.target_positions = POSITION_3A.copy()
+                self.current_stage = STAGE_POSITION_3A
+                self.move_duration = 1.5
                 self.start_time = time.time()
-                print("Moving to Position 3...")
-                
-            elif self.current_stage == STAGE_POSITION_3:
-                # Check if interrupt was requested during transition
-                if self.interrupt_requested:
-                    return  # Exit immediately, graceful_stop has already set up return path
-                
-                # Close hand after position 3
-                print("Closing hand until pressure detected...")
-                self.hand_controller.close_left_hand()
-                self.pressure_detected = False
-                
-                # Monitor pressure while closing
-                close_start = time.time()
-                max_close_time = 3.0
-                
-                while (time.time() - close_start) < max_close_time:
-                    # Check for interrupt during pressure monitoring
+                print("Moving to Position 3A...")
+            
+            elif self.current_stage == STAGE_POSITION_3A:
+                self.start_positions = POSITION_3A.copy()
+                self.target_positions = POSITION_3B.copy()
+                self.current_stage = STAGE_POSITION_3B
+                self.move_duration = 1.0
+                self.start_time = time.time()
+                print("Moving to Position 3B...")
+            
+            elif self.current_stage == STAGE_POSITION_3B:
+                self.start_positions = POSITION_3B.copy()
+                self.target_positions = POSITION_3C.copy()
+                self.current_stage = STAGE_POSITION_3C
+                self.move_duration = 1.0
+                self.start_time = time.time()
+                print("Moving to Position 3C...")
+            
+            elif self.current_stage == STAGE_POSITION_3C:
+                self.start_positions = POSITION_3C.copy()
+                self.target_positions = POSITION_3D.copy()
+                self.current_stage = STAGE_POSITION_3D
+                self.move_duration = 1.0
+                self.start_time = time.time()
+                print("Moving to Position 3D...")
+            
+            elif self.current_stage == STAGE_POSITION_3D:
+                # Stay at position 3D until hand has closed
+                if not self.hand_closed_at_3f:  # Reusing flag name
+                    # Check if interrupt was requested during transition
                     if self.interrupt_requested:
-                        print("Interrupt during hand closing - aborting")
-                        return
+                        return  # Exit immediately, graceful_stop has already set up return path
                     
-                    if self._check_pressure():
-                        print("Pressure detected - holding position!")
-                        self.hand_controller.hold_left_hand_position()
-                        self.pressure_detected = True
-                        break
-                    time.sleep(0.05)  # Check at 20Hz
+                    # Close hand after reaching final approach position (3D)
+                    print("At Position 3D - closing hand until pressure detected...")
+                    self.hand_controller.close_left_hand()
+                    self.pressure_detected = False
+                    
+                    # Monitor pressure while closing
+                    close_start = time.time()
+                    max_close_time = 3.0
+                    
+                    while (time.time() - close_start) < max_close_time:
+                        # Check for interrupt during pressure monitoring
+                        if self.interrupt_requested:
+                            print("Interrupt during hand closing - aborting")
+                            return
+                        
+                        if self._check_pressure():
+                            print("Pressure detected - holding position!")
+                            self.hand_controller.hold_left_hand_position()
+                            self.pressure_detected = True
+                            break
+                        time.sleep(0.05)  # Check at 20Hz
+                    
+                    if not self.pressure_detected and not self.interrupt_requested:
+                        print("No pressure detected - hand fully closed")
+                    
+                    # Mark hand as closed so we can proceed
+                    self.hand_closed_at_3f = True
                 
-                if not self.pressure_detected and not self.interrupt_requested:
-                    print("No pressure detected - hand fully closed")
-                
-                # Move to Position 4 after grasping
-                if not self.interrupt_requested:
-                    self.start_positions = POSITION_3.copy()
-                    self.target_positions = POSITION_4.copy()
-                    self.current_stage = STAGE_POSITION_4
+                # Now that hand has closed, move to Position 7 (hold position)
+                if self.hand_closed_at_3f and not self.interrupt_requested:
+                    self.start_positions = POSITION_3D.copy()
+                    self.target_positions = POSITION_7.copy()
+                    self.current_stage = STAGE_POSITION_7
                     self.move_duration = 2.0
                     self.start_time = time.time()
-                    print("Moving to Position 4...")
+                    print("Moving to Position 7 (hold position)...")
             
-            elif self.current_stage == STAGE_POSITION_4:
+            elif self.current_stage == STAGE_POSITION_7:
                 # Check if interrupt was requested during transition
                 if self.interrupt_requested:
                     return  # Exit immediately, graceful_stop has already set up return path
                 
-                # Hold position 4 indefinitely - wait for user interrupt
+                # Hold position 7 indefinitely - wait for user interrupt or put_down command
                 if not self.interrupt_requested and not self.position_4_hold_printed:
-                    print("Position 4 reached - holding position until Ctrl+C...")
+                    print("Position 7 reached - holding position until Ctrl+C or put-down command...")
                     self.position_4_hold_printed = True
-                # Don't transition to next stage - stay in STAGE_POSITION_4
+                # Don't transition to next stage - stay in STAGE_POSITION_7
+                
             elif self.current_stage == STAGE_RETURN_TO_POSITION_1:
                 # Return to starting position
                 self.start_positions = POSITION_1.copy()
@@ -379,26 +422,52 @@ class LeftArmSequence:
                 self.start_time = time.time()
                 print("Releasing arm control...")
             
-            elif self.current_stage == STAGE_PUTDOWN_TO_POS3:
-                # Reached Position 3 - open hand
-                print("Position 3 reached - opening hand...")
+            # Put-down sequence: reverse through positions 3D -> 3C -> 3B -> 3A -> 2 -> 1 -> start
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS3D:
+                # Reached Position 3D - open hand to release bottle
+                print("Position 3D reached - opening hand...")
                 self.hand_controller.open_left_hand()
                 time.sleep(2.5)  # Wait for hand to open
                 
-                # Move to Position 2
-                self.start_positions = POSITION_3.copy()
-                self.target_positions = POSITION_2.copy()
-                self.current_stage = STAGE_PUTDOWN_TO_POS2
-                self.move_duration = 2.0
+                # Move to Position 3C
+                self.start_positions = POSITION_3D.copy()
+                self.target_positions = POSITION_3C.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_POS3C
+                self.move_duration = 1.0
                 self.start_time = time.time()
-                print("▶️  Moving to Position 2...")
+                print("Moving to Position 3C...")
             
-            elif self.current_stage == STAGE_PUTDOWN_TO_POS2:
-                # Close hand and move to Position 1
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS3C:
+                self.start_positions = POSITION_3C.copy()
+                self.target_positions = POSITION_3B.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_POS3B
+                self.move_duration = 1.0
+                self.start_time = time.time()
+                print("Moving to Position 3B...")
+            
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS3B:
+                self.start_positions = POSITION_3B.copy()
+                self.target_positions = POSITION_3A.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_POS3A
+                self.move_duration = 1.0
+                self.start_time = time.time()
+                print("Moving to Position 3A...")
+            
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS3A:
+                # Close hand and move to Position 2
                 print("Closing hand...")
                 self.hand_controller.close_left_hand()
                 time.sleep(2.0)  # Wait for hand to close
                 
+                self.start_positions = POSITION_3A.copy()
+                self.target_positions = POSITION_2.copy()
+                self.current_stage = STAGE_PUTDOWN_TO_POS2
+                self.move_duration = 1.5
+                self.start_time = time.time()
+                print("Moving to Position 2...")
+            
+            elif self.current_stage == STAGE_PUTDOWN_TO_POS2:
+                # Move to Position 1
                 self.start_positions = POSITION_2.copy()
                 self.target_positions = POSITION_1.copy()
                 self.current_stage = STAGE_PUTDOWN_TO_POS1
@@ -449,7 +518,7 @@ class LeftArmSequence:
 
 def main():
     print("Unitree G1 - Left Arm Custom Sequence")
-    print("Sequence: Start → Pos1 → Pos2 → Pos3 → Hand → Pos4 → Hold")
+    print("Sequence: Start → Pos1 → Pos2 → 3A → 3B → 3C → 3D → Hand → Pos7 (Hold)")
     print("\nSAFETY WARNING:")
     print("   - Ensure no obstacles near left arm")
     print("   - Robot must be in stable stance")

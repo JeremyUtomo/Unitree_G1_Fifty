@@ -91,8 +91,9 @@ class HandController:
         return False
     
     def close_left_hand(self):
-        """Close the left hand"""
-        if self._send_hand_command(self.left_hand_publisher, LEFT_HAND_CLOSE):
+        """Close the left hand (2x slower than open)"""
+        # Use half the kp gain to close 2x slower
+        if self._send_hand_command(self.left_hand_publisher, LEFT_HAND_CLOSE, kp=KP_HAND/2):
             print("Left hand closing...")
             return True
         return False
@@ -105,8 +106,9 @@ class HandController:
         return False
     
     def close_right_hand(self):
-        """Close the right hand"""
-        if self._send_hand_command(self.right_hand_publisher, RIGHT_HAND_CLOSE):
+        """Close the right hand (2x slower than open)"""
+        # Use half the kp gain to close 2x slower
+        if self._send_hand_command(self.right_hand_publisher, RIGHT_HAND_CLOSE, kp=KP_HAND/2):
             print("Right hand closing...")
             return True
         return False

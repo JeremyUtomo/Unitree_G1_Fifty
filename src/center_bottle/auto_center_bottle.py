@@ -44,6 +44,19 @@ MAX_YAW_SPEED = 0.5  # rad/s - maximum angular velocity (matches loco_client)
 MIN_YAW_SPEED = 0.03  # rad/s - extremely slow minimum speed for perfect alignment
 MIN_CONFIDENCE = 0.5  # Minimum detection confidence
 
+# Target box for bottle alignment (stop when bottle center is inside this box)
+BOX_TOP_LEFT = (250, 250)
+BOX_TOP_RIGHT = (370, 250)
+BOX_BOTTOM_LEFT = (265, 350)
+BOX_BOTTOM_RIGHT = (400, 350)
+# Calculate center X range (interpolate between top and bottom)
+BOX_X_MIN_TOP = BOX_TOP_LEFT[0]
+BOX_X_MAX_TOP = BOX_TOP_RIGHT[0]
+BOX_X_MIN_BOTTOM = BOX_BOTTOM_LEFT[0]
+BOX_X_MAX_BOTTOM = BOX_BOTTOM_RIGHT[0]
+BOX_Y_MIN = BOX_TOP_LEFT[1]  # 250
+BOX_Y_MAX = BOX_BOTTOM_LEFT[1]  # 350
+
 
 def gst_pipeline(client_ip: str, w: int, h: int, fps: int) -> tuple[Gst.Pipeline, GstApp.AppSrc, GstApp.AppSrc]:
     """Create the GStreamer pipeline and return (pipeline, src_rgb, src_depth)."""
@@ -159,14 +172,20 @@ def detect_cans(model: YOLO, image: np.ndarray, confidence_threshold: float = 0.
             cv2.putText(annotated, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
+    # Draw center line
     cv2.line(annotated, (CENTER_X, 0), (CENTER_X, CAMERA_HEIGHT), (255, 0, 0), 2)
     
-    cv2.line(annotated, (0, 250), (CAMERA_WIDTH, 250), (0, 255, 255), 2)
-    cv2.putText(annotated, "Y=250 (min depth)", (10, 245),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    # Draw target box (trapezoid shape)
+    # Top edge
+    cv2.line(annotated, BOX_TOP_LEFT, BOX_TOP_RIGHT, (0, 255, 255), 2)
+    # Bottom edge
+    cv2.line(annotated, BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, (0, 255, 255), 2)
+    # Left edge
+    cv2.line(annotated, BOX_TOP_LEFT, BOX_BOTTOM_LEFT, (0, 255, 255), 2)
+    # Right edge
+    cv2.line(annotated, BOX_TOP_RIGHT, BOX_BOTTOM_RIGHT, (0, 255, 255), 2)
     
-    cv2.line(annotated, (0, 300), (CAMERA_WIDTH, 300), (0, 255, 255), 2)
-    cv2.putText(annotated, "Y=300 (max depth)", (10, 295),
+    cv2.putText(annotated, "TARGET BOX", (BOX_TOP_LEFT[0], BOX_TOP_LEFT[1] - 10),
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
     
     cv2.putText(annotated, f"Bottles: {len(detections)}", (10, 25),
@@ -180,6 +199,40 @@ def get_depth_at_point(depth_frame, x: int, y: int) -> float:
     if not isinstance(depth_frame, rs.depth_frame):
         depth_frame = depth_frame.as_depth_frame()
     return depth_frame.get_distance(x, y)
+
+
+def is_point_in_target_box(cx: int, cy: int) -> bool:
+    """
+    Check if a point (cx, cy) is inside the target trapezoid box.
+    The box has different X ranges at top and bottom, so we interpolate.
+    """
+    # Check Y bounds first
+    if cy < BOX_Y_MIN or cy > BOX_Y_MAX:
+        return False
+    
+    # Interpolate X bounds based on Y position
+    # At Y=250 (top): X range is 250-370
+    # At Y=350 (bottom): X range is 265-400
+    y_ratio = (cy - BOX_Y_MIN) / (BOX_Y_MAX - BOX_Y_MIN)
+    
+    x_min = BOX_X_MIN_TOP + y_ratio * (BOX_X_MIN_BOTTOM - BOX_X_MIN_TOP)
+    x_max = BOX_X_MAX_TOP + y_ratio * (BOX_X_MAX_BOTTOM - BOX_X_MAX_TOP)
+    
+    return x_min <= cx <= x_max
+
+
+def get_box_center_x_at_y(cy: int) -> float:
+    """Get the center X of the target box at a given Y coordinate"""
+    if cy < BOX_Y_MIN:
+        cy = BOX_Y_MIN
+    elif cy > BOX_Y_MAX:
+        cy = BOX_Y_MAX
+    
+    y_ratio = (cy - BOX_Y_MIN) / (BOX_Y_MAX - BOX_Y_MIN)
+    x_min = BOX_X_MIN_TOP + y_ratio * (BOX_X_MIN_BOTTOM - BOX_X_MIN_TOP)
+    x_max = BOX_X_MAX_TOP + y_ratio * (BOX_X_MAX_BOTTOM - BOX_X_MAX_TOP)
+    
+    return (x_min + x_max) / 2
 
 
 class BottleCenteringController:
@@ -275,19 +328,18 @@ class BottleCenteringController:
             x1, y1, x2, y2 = bottle['bbox']
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
-            
-            raw_error = cx - CENTER_X
-            
-            self.error_history.append(raw_error)
-            if len(self.error_history) > self.max_history:
-                self.error_history.pop(0)
-            
-            error = int(sum(self.error_history) / len(self.error_history))
-            self.last_known_error = error
         
-        if abs(error) < CENTER_THRESHOLD:
+        # Check if bottle is inside target box
+        in_box = is_point_in_target_box(cx, cy)
+        
+        # Get the target center X for the current Y position
+        target_cx = get_box_center_x_at_y(cy)
+        x_error = cx - target_cx
+        
+        if in_box:
+            # Bottle is inside target box - we're aligned!
             if not self.centered:
-                print(f"\nHorizontally centered! (error: {error:+d} px) - Waiting 0.3s for clear image...")
+                print(f"\nBottle in target box! X={cx}, Y={cy} - Waiting for confirmation...")
                 self.centered = True
                 self.centering_complete_time = time.time()
             
@@ -296,16 +348,40 @@ class BottleCenteringController:
             
             if time_since_centered < self.post_center_wait:
                 wait_remaining = self.post_center_wait - time_since_centered
-                print(f"Waiting {wait_remaining:.1f}s for clear image after centering...        ", end='\r')
+                print(f"Confirming alignment... {wait_remaining:.1f}s remaining - X={cx}, Y={cy}        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(0, 0, 0)
                 return
             
-            if cy < 250:
+            # Alignment confirmed
+            if not self.alignment_confirmed:
+                print(f"\n✓✓✓ BOTTLE_ALIGNED ✓✓✓")
+                print(f"ALIGNMENT CONFIRMED - Bottle at X={cx}, Y={cy}")
+                self.alignment_confirmed = True
+            
+            print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓")
+            if self.loco_client:
+                self.loco_client.Move(0, 0, 0)
+            
+            # Terminate script after full alignment
+            print("\nAlignment complete - terminating script")
+            return True  # Signal to exit main loop
+        
+        else:
+            # Bottle is outside target box - need to move
+            if self.centered:
+                print(f"\nBottle moved outside target box - resuming alignment...")
+                self.centered = False
+                self.alignment_confirmed = False
+            
+            # Determine what movement is needed
+            # Check Y position first (forward/backward)
+            if cy < BOX_Y_MIN:
+                # Bottle is above box - walk forward
                 if not self.forward_walking:
                     current_time = time.time()
                     if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
-                        print(f"\nWalking forward - Bottle Y={cy} (target: 250-300)")
+                        print(f"\nWalking forward - Bottle Y={cy} (target: {BOX_Y_MIN}-{BOX_Y_MAX})")
                         self.forward_walking = True
                         self.depth_aligned = False
                         self.last_mode_switch_time = current_time
@@ -316,25 +392,19 @@ class BottleCenteringController:
                             self.loco_client.Move(0, 0, 0)
                         return
                 
-                distance_to_target = 250 - cy
                 vx_speed = 0.2
-                
-                print(f"Walking forward (vx={vx_speed:.2f}, dist={distance_to_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                print(f"Walking forward (vx={vx_speed:.2f}) - Bottle Y={cy} (target: {BOX_Y_MIN}-{BOX_Y_MAX})        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(vx_speed, 0, 0)
                 return
-            elif cy > 300:
-                # Reset alignment state if bottle moved too far
-                if self.depth_aligned:
-                    print(f"\nBottle moved too far - resetting depth alignment")
-                    self.depth_aligned = False
                 
-                if self.forward_walking or not self.depth_aligned:
+            elif cy > BOX_Y_MAX:
+                # Bottle is below box - step backward
+                if self.forward_walking:
                     current_time = time.time()
                     if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
-                        print(f"\nStepping backward - Bottle Y={cy} (target: 250-300)")
+                        print(f"\nStepping backward - Bottle Y={cy} (target: {BOX_Y_MIN}-{BOX_Y_MAX})")
                         self.forward_walking = False
-                        self.depth_aligned = False
                         self.last_mode_switch_time = current_time
                     else:
                         wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
@@ -343,104 +413,66 @@ class BottleCenteringController:
                             self.loco_client.Move(0, 0, 0)
                         return
                 
-                distance_over_target = cy - 300
                 vx_speed = -0.2
-                
-                print(f"Stepping backward (vx={vx_speed:.2f}, dist={distance_over_target}px) - Bottle Y={cy} (target: 250-300)        ", end='\r')
+                print(f"Stepping backward (vx={vx_speed:.2f}) - Bottle Y={cy} (target: {BOX_Y_MIN}-{BOX_Y_MAX})        ", end='\r')
                 if self.loco_client:
                     self.loco_client.Move(vx_speed, 0, 0)
                 return
+            
             else:
-                if self.forward_walking or not self.depth_aligned:
-                    print(f"\nDEPTH ALIGNED - Bottle Y={cy} (target: 250-300)")
-                    self.forward_walking = False
-                    self.depth_aligned = True
-                    self.alignment_confirmation_time = time.time()
+                # Y is in range but X is outside - need to side-step
+                if self.forward_walking:
+                    current_time = time.time()
+                    if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
+                        print(f"\nSwitching to side-step mode")
+                        self.forward_walking = False
+                        self.last_mode_switch_time = current_time
+                    else:
+                        wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
+                        print(f"Waiting {wait_remaining:.1f}s before side-stepping...        ", end='\r')
+                        if self.loco_client:
+                            self.loco_client.Move(0, 0, 0)
+                        return
                 
-                current_time = time.time()
-                time_since_aligned = current_time - self.alignment_confirmation_time
+                # Side-step to center X
+                print(f"Side-step: X={cx} (target={target_cx:.0f}), Error: {x_error:+.0f} px        ", end='\r')
                 
-                if time_since_aligned < self.alignment_confirmation_delay:
-                    wait_remaining = self.alignment_confirmation_delay - time_since_aligned
-                    print(f"Confirming alignment... {wait_remaining:.1f}s remaining - X={cx}, Y={cy}        ", end='\r')
-                    if self.loco_client:
-                        self.loco_client.Move(0, 0, 0)
-                else:
-                    if not self.alignment_confirmed:
-                        print(f"\n✓✓✓ BOTTLE_ALIGNED ✓✓✓")
-                        print(f"ALIGNMENT CONFIRMED")
-                        self.alignment_confirmed = True
-                    
-                    print(f"BOTTLE FULLY ALIGNED - X={cx}, Y={cy} ✓")
-                    if self.loco_client:
-                        self.loco_client.Move(0, 0, 0)
-                    
-                    # Terminate script after full alignment
-                    print("\nAlignment complete - terminating script")
-                    return True  # Signal to exit main loop
-        else:
-            if self.forward_walking or self.depth_aligned:
+                step_dir = -1.0 if x_error > 0 else 1.0
+                vy_speed = step_dir * 0.2
                 current_time = time.time()
-                if self.last_mode_switch_time == 0 or (current_time - self.last_mode_switch_time) >= self.mode_switch_delay:
-                    print(f"\nLost horizontal alignment - stopping forward walk, resuming side-step")
-                    self.forward_walking = False
-                    self.depth_aligned = False
-                    self.last_mode_switch_time = current_time
-                else:
-                    wait_remaining = self.mode_switch_delay - (current_time - self.last_mode_switch_time)
-                    print(f"Waiting {wait_remaining:.1f}s before resuming side-step...        ", end='\r')
+                
+                if self.last_step_time == 0:
+                    self.last_step_time = current_time
+                    print(f"\nWaiting 0.3s for clear image before first step...")
                     if self.loco_client:
                         self.loco_client.Move(0, 0, 0)
                     return
-            
-            if self.centered:
-                print(f"\nBottle moved - resuming side-stepping...")
-                self.centered = False
-            
-            if abs(error) < CENTER_THRESHOLD:
-                print(f"Bottle aligned (error: {error:+d} px) - no step needed        ", end='\r')
-                if self.loco_client:
-                    self.loco_client.Move(0, 0, 0)
-                return
-            
-            print(f"Side-step: X={cx} (target={CENTER_X}), Error: {error:+d} px → aligning...        ", end='\r')
-            
-            step_dir = -1.0 if error > 0 else 1.0
-            vy_speed = step_dir * 0.2
-            current_time = time.time()
-            
-            if self.last_step_time == 0:
-                self.last_step_time = current_time
-                print(f"\nWaiting 0.3s for clear image before first step...")
-                if self.loco_client:
-                    self.loco_client.Move(0, 0, 0)
-                return
-            
-            time_since_last_step = current_time - self.last_step_time
-            
-            initial_wait = 0.3
-            step_duration = 0.5
-            total_cycle = initial_wait + step_duration + self.step_delay
-            
-            if time_since_last_step < initial_wait:
-                wait_remaining = initial_wait - time_since_last_step
-                print(f"Waiting {wait_remaining:.1f}s for clear image before step...        ", end='\r')
-                if self.loco_client:
-                    self.loco_client.Move(0, 0, 0)
-            elif time_since_last_step < initial_wait + step_duration:
-                print(f"\nSIDE-STEP: error={error}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
-                if self.loco_client:
-                    self.loco_client.Move(0, vy_speed, 0)
-            elif time_since_last_step < total_cycle:
-                wait_remaining = total_cycle - time_since_last_step
-                print(f"Waiting {wait_remaining:.1f}s for stable image...        ", end='\r')
-                if self.loco_client:
-                    self.loco_client.Move(0, 0, 0)
-            else:
-                self.last_step_time = current_time
-                print(f"\nWaiting 0.3s for clear image before next step...")
-                if self.loco_client:
-                    self.loco_client.Move(0, 0, 0)
+                
+                time_since_last_step = current_time - self.last_step_time
+                
+                initial_wait = 0.3
+                step_duration = 0.5
+                total_cycle = initial_wait + step_duration + self.step_delay
+                
+                if time_since_last_step < initial_wait:
+                    wait_remaining = initial_wait - time_since_last_step
+                    print(f"Waiting {wait_remaining:.1f}s for clear image before step...        ", end='\r')
+                    if self.loco_client:
+                        self.loco_client.Move(0, 0, 0)
+                elif time_since_last_step < initial_wait + step_duration:
+                    print(f"\nSIDE-STEP: error={x_error:.0f}, vy_speed={vy_speed:.3f}, dir={'RIGHT' if step_dir < 0 else 'LEFT'}")
+                    if self.loco_client:
+                        self.loco_client.Move(0, vy_speed, 0)
+                elif time_since_last_step < total_cycle:
+                    wait_remaining = total_cycle - time_since_last_step
+                    print(f"Waiting {wait_remaining:.1f}s for stable image...        ", end='\r')
+                    if self.loco_client:
+                        self.loco_client.Move(0, 0, 0)
+                else:
+                    self.last_step_time = current_time
+                    print(f"\nWaiting 0.3s for clear image before next step...")
+                    if self.loco_client:
+                        self.loco_client.Move(0, 0, 0)
     
     def stop(self):
         """Stop all motion"""
