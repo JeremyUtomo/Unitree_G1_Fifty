@@ -162,7 +162,11 @@ class LeftArmSequence:
         """Stop the sequence immediately"""
         self.is_running = False
         if self.control_thread:
-            self.control_thread.Stop()
+            try:
+                self.control_thread.Stop()
+            except AttributeError:
+                # RecurrentThread might not have Stop() method
+                pass
         print("Sequence stopped")
     
     def start_put_down(self):

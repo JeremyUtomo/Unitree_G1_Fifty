@@ -675,18 +675,33 @@ def main():
     rclpy.init()
     
     controller = IntegratedController(network_interface)
+    exit_code = 1
     
     try:
         success = controller.run_full_sequence()
         controller.cleanup()  # Always cleanup after sequence
-        sys.exit(0 if success else 1)
+        exit_code = 0 if success else 1
     except KeyboardInterrupt:
         print("\n⚠ Interrupted by user")
         controller.cleanup()
-        sys.exit(0)
+        exit_code = 0
+    except Exception as e:
+        print(f"\n✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        controller.cleanup()
+        exit_code = 1
     finally:
-        controller.destroy_node()
-        rclpy.shutdown()
+        try:
+            controller.destroy_node()
+        except Exception:
+            pass
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass  # Ignore if already shut down
+    
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

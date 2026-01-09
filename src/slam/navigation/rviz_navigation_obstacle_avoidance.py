@@ -304,10 +304,15 @@ class ObstacleAvoidanceNavigator(Node):
         self.safety_stop_enabled = True  # Can be disabled when near goal
         self.goal_safety_distance = 0.80  # Disable safety within 80cm of goal
         
-        # Track starting position for second goal
-        self.second_goal_start_x = None
-        self.second_goal_start_y = None
-        self.second_goal_distance_threshold = 0.80  # Re-enable safety after 80cm travel
+        # Track starting position for goal transitions
+        self.goal_start_x = None
+        self.goal_start_y = None
+        self.goal_start_distance_threshold = 0.70  # Re-enable safety after 70cm travel from any goal start
+        self.is_first_goal = True  # Track if this is the first or second goal
+        
+        # Alignment timeout tracking
+        self._alignment_start_time = None
+        self._alignment_attempts = 0
         
         # Subscribe to odometry
         self.create_subscription(Odometry, '/Odometry', self.odom_callback, 10)
@@ -376,6 +381,14 @@ class ObstacleAvoidanceNavigator(Node):
         if self.current_x is None or not self.has_goal:
             return
         
+        # Skip obstacle detection entirely if safety stop is disabled
+        # (e.g., when near goal/table area)
+        if not self.safety_stop_enabled:
+            # Clear any previous obstacle detection when safety is disabled
+            if self.obstacle_detected:
+                self.obstacle_detected = False
+            return
+        
         # Throttle checks to avoid excessive processing (check every 0.2 seconds)
         current_time = time.time()
         if current_time - self.last_obstacle_check_time < 0.2:
@@ -436,19 +449,32 @@ class ObstacleAvoidanceNavigator(Node):
         q = msg.pose.orientation
         self.goal_yaw = self.quaternion_to_yaw(q.x, q.y, q.z, q.w)
         
-        # If this is a second goal (already had a goal before), save starting position
-        # and initially disable safety stop
-        if self.has_goal:
-            print("\nSecond goal detected - saving start position for safety re-enable")
-            self.second_goal_start_x = self.current_x
-            self.second_goal_start_y = self.current_y
+        # Check if we're leaving from a previous goal position (goal_start_x/y was saved when goal was reached)
+        # This handles both: receiving new goal while navigating OR after reaching a goal
+        leaving_previous_goal = self.goal_start_x is not None
+        
+        if self.has_goal or leaving_previous_goal:
+            # Subsequent goal OR leaving from a completed goal position
+            goal_type = "while navigating" if self.has_goal else "after reaching previous goal"
+            print(f"\nNew goal detected {goal_type}")
+            print("Saving start position for safety re-enable (leaving current area)")
+            self.goal_start_x = self.current_x
+            self.goal_start_y = self.current_y
             self.safety_stop_enabled = False
-            print(f"Safety stop DISABLED initially for second goal (will re-enable after 80cm travel)")
+            self.obstacle_detected = False  # Clear any existing obstacle detection
+            self.is_first_goal = False
+            print(f"Safety stop DISABLED initially (will re-enable after 0.7m travel)")
+            print(f"Obstacle detection CLEARED - robot should start moving now")
         else:
-            # First goal - reset second goal tracking
-            self.second_goal_start_x = None
-            self.second_goal_start_y = None
+            # Very first goal - no previous goal position saved
+            self.goal_start_x = None
+            self.goal_start_y = None
             self.safety_stop_enabled = True
+            self.is_first_goal = True
+        
+        # Reset alignment timer for new goal
+        self._alignment_start_time = None
+        self._alignment_attempts = 0
         
         print(f"\nNew goal: ({self.goal_x:.2f}, {self.goal_y:.2f}) heading {math.degrees(self.goal_yaw):.1f}°")
         print("Planning path with obstacle avoidance...")
@@ -499,25 +525,40 @@ class ObstacleAvoidanceNavigator(Node):
             (self.goal_y - self.current_y) ** 2
         )
         
+        # Debug: print safety state periodically
+        if hasattr(self, '_last_debug_time'):
+            if time.time() - self._last_debug_time > 2.0:
+                print(f"\n  [DEBUG] safety_enabled={self.safety_stop_enabled}, obstacle_detected={self.obstacle_detected}, distance_to_goal={distance_to_goal:.2f}m")
+                self._last_debug_time = time.time()
+        else:
+            self._last_debug_time = time.time()
+        
         # SAFETY STOP MANAGEMENT
-        # Disable safety stop when within 80cm of goal
+        # Disable safety stop when within 80cm of ANY goal (first or second)
         if distance_to_goal < self.goal_safety_distance:
             if self.safety_stop_enabled:
-                print(f"\n  Safety stop DISABLED - within {distance_to_goal*100:.0f}cm of goal (< 80cm)")
+                goal_name = "first" if self.is_first_goal else "second"
+                print(f"\n  Safety stop DISABLED - within {distance_to_goal*100:.0f}cm of {goal_name} goal (< 80cm)")
                 self.safety_stop_enabled = False
+                self.obstacle_detected = False  # Clear obstacle flag when disabling safety
         
-        # For second goal: re-enable safety stop after traveling 80cm from start
-        if self.second_goal_start_x is not None:
+        # Re-enable safety stop after traveling from goal start (leaving table area)
+        if self.goal_start_x is not None:
             distance_from_start = math.sqrt(
-                (self.current_x - self.second_goal_start_x) ** 2 +
-                (self.current_y - self.second_goal_start_y) ** 2
+                (self.current_x - self.goal_start_x) ** 2 +
+                (self.current_y - self.goal_start_y) ** 2
             )
-            if distance_from_start > self.second_goal_distance_threshold and not self.safety_stop_enabled:
-                print(f"\n  Safety stop RE-ENABLED - traveled {distance_from_start*100:.0f}cm from second goal start (> 80cm)")
+            
+            # Clear obstacle detection while safety is disabled
+            if not self.safety_stop_enabled and self.obstacle_detected:
+                self.obstacle_detected = False
+            
+            if distance_from_start > self.goal_start_distance_threshold and not self.safety_stop_enabled:
+                print(f"\n  Safety stop RE-ENABLED - traveled {distance_from_start:.2f}m from goal start (> {self.goal_start_distance_threshold}m)")
                 self.safety_stop_enabled = True
-                # Clear the second goal start tracking
-                self.second_goal_start_x = None
-                self.second_goal_start_y = None
+                # Clear the goal start tracking
+                self.goal_start_x = None
+                self.goal_start_y = None
         
         # SAFETY CHECK: Stop if obstacle detected nearby (only if safety stop is enabled)
         if self.safety_stop_enabled and self.obstacle_detected:
@@ -533,16 +574,59 @@ class ObstacleAvoidanceNavigator(Node):
             
             print(f"\nAt goal! Current yaw: {math.degrees(self.current_yaw):.1f}° | Target yaw: {math.degrees(self.goal_yaw):.1f}° | Error: {math.degrees(heading_error):.1f}°")
             
-            if abs(heading_error) < math.radians(10):
-                print(f"Goal reached! Final position: ({self.current_x:.2f}, {self.current_y:.2f}) yaw: {math.degrees(self.current_yaw):.1f}°")
+            # Track alignment attempts to prevent infinite spinning
+            if self._alignment_start_time is None:
+                self._alignment_start_time = time.time()
+                self._alignment_attempts = 0
+            
+            self._alignment_attempts += 1
+            alignment_duration = time.time() - self._alignment_start_time
+            
+            # Timeout after 10 seconds of alignment attempts - accept current orientation
+            if alignment_duration > 10.0:
+                goal_name = "First" if self.is_first_goal else "Second"
+                print(f"\n{goal_name} goal reached! (alignment timeout - accepting current orientation)")
+                print(f"Final position: ({self.current_x:.2f}, {self.current_y:.2f}) yaw: {math.degrees(self.current_yaw):.1f}°")
+                
+                self.goal_start_x = self.current_x
+                self.goal_start_y = self.current_y
+                print(f"Saved current position for safety re-enable when leaving this goal area")
+                
                 self.stop_robot()
                 self.has_goal = False
+                self._alignment_start_time = None
+                return
+            
+            if abs(heading_error) < math.radians(15):  # 15 degree tolerance (reduced from 20)
+                goal_name = "First" if self.is_first_goal else "Second"
+                print(f"{goal_name} goal reached! Final position: ({self.current_x:.2f}, {self.current_y:.2f}) yaw: {math.degrees(self.current_yaw):.1f}°")
+                
+                # Save this position as the start for the next goal (for leaving the area)
+                # This enables the robot to leave from first goal without safety stop interference
+                self.goal_start_x = self.current_x
+                self.goal_start_y = self.current_y
+                print(f"Saved current position for safety re-enable when leaving this goal area")
+                
+                self.stop_robot()
+                self.has_goal = False
+                self._alignment_start_time = None
                 return
             else:
-                # Rotate to goal heading
-                angular_vel = np.clip(heading_error * 0.8, -0.8, 0.8)
-                print(f"  Aligning to goal orientation: {math.degrees(heading_error):.1f}° remaining", end='\r')
-                self.send_velocity(0.0, 0.0, angular_vel) 
+                # Rotate to goal heading with lower gain to prevent oscillation
+                # Use proportional control with lower gain (0.5 instead of 0.8)
+                angular_vel = heading_error * 0.5
+                
+                # Clamp to reasonable range
+                angular_vel = np.clip(angular_vel, -0.5, 0.5)
+                
+                # Ensure minimum velocity to overcome friction (but not too fast)
+                if 0 < angular_vel < 0.15:
+                    angular_vel = 0.15
+                elif -0.15 < angular_vel < 0:
+                    angular_vel = -0.15
+                
+                print(f"  Aligning to goal orientation: {math.degrees(heading_error):.1f}° remaining (vel: {-angular_vel:.2f})", end='\r')
+                self.send_velocity(0.0, 0.0, -angular_vel)  # Negated to match waypoint navigation convention
                 return
         
         # Follow waypoints
