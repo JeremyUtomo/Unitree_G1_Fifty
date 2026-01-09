@@ -493,25 +493,10 @@ class LeftArmSequence:
                 self.start_time = time.time()
             
             elif self.current_stage == STAGE_RELEASE_CONTROL:
-                # Control released - now switch FSM from 500 to 801
+                # Control released - arm sequence complete
+                # Note: FSM switching is handled by integrated_controller.py
                 print("Arm control released")
-                
-                if self.loco_client and self.put_down_requested:
-                    print("Switching FSM from 500 (balance) to 801 (walking)...")
-                    try:
-                        # Stop all movement first
-                        self.loco_client.Move(0, 0, 0)
-                        time.sleep(0.5)
-                        
-                        # Set FSM to 801 
-                        self.loco_client.SetFsmId(801)
-                        time.sleep(2)
-                        
-                        print("Walking mode (801) active")
-                    except Exception as e:
-                        print(f"Error setting FSM ID: {e}")
-                elif not self.loco_client:
-                    print("Warning: LocoClient not available, cannot set FSM ID")
+                print("Put-down sequence complete")
                 
                 self.stop()
 

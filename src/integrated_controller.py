@@ -202,8 +202,17 @@ class IntegratedController(Node):
         print("PHASE 2: Auto-Center Bottle (via SSH)")
         print("="*60)
         
-        # Note: auto_center_bottle.py will switch to FSM 500 itself
-        # when table edge is detected
+        # Switch to FSM 500 (balance mode) before auto-centering
+        # This allows the robot to side-step for alignment
+        print("\nSwitching to FSM 500 (balance mode) for side-stepping...")
+        try:
+            self.loco_client.Move(0, 0, 0)
+            time.sleep(0.3)
+            self.loco_client.SetFsmId(500)
+            time.sleep(1.0)
+            print("✓ FSM set to 500 (balance mode)")
+        except Exception as e:
+            print(f"Warning: Failed to set FSM 500: {e}")
         
         robot_host = "unitree@192.168.123.164"
         robot_script = "/home/unitree/Unitree_G1_Fifty/src/center_bottle/auto_center_bottle.py"
@@ -339,7 +348,7 @@ class IntegratedController(Node):
             print("✗ Failed to start sequence")
             return False
         
-        print("[ARM] Waiting for Position 4...")
+        print("[ARM] Waiting for Position 7 (hold position)...")
         
         # Monitor arm controller status
         last_stage = -1
@@ -350,22 +359,26 @@ class IntegratedController(Node):
                     0: "Starting Position",
                     1: "Position 1",
                     2: "Position 2 (Opening Hand)",
-                    3: "Position 3 (Closing Hand)",
-                    4: "Position 4 (Holding Bottle)"
+                    '3a': "Position 3A",
+                    '3b': "Position 3B",
+                    '3c': "Position 3C",
+                    '3d': "Position 3D (Closing Hand)",
+                    7: "Position 7 (Holding Bottle)"
                 }
                 if self.arm_controller.current_stage in stage_names:
                     print(f"[ARM] Stage: {stage_names[self.arm_controller.current_stage]}")
                 last_stage = self.arm_controller.current_stage
             
-            if self.arm_controller.current_stage == 4 and self.arm_controller.position_4_hold_printed:
-                print("\n[Controller] ✓ Position 4 reached and holding!")
+            # Check for Position 7 reached (STAGE_POSITION_7 = 7)
+            if self.arm_controller.current_stage == 7 and self.arm_controller.position_4_hold_printed:
+                print("\n[Controller] ✓ Position 7 reached and holding!")
                 break
             time.sleep(0.1)
         
         print("=" * 60)
         
         print("\n" + "="*60)
-        print("✓ Bottle grasped at Position 4!")
+        print("✓ Bottle grasped at Position 7!")
         print("Phase 3 complete")
         print("="*60 + "\n")
         return True
@@ -466,9 +479,16 @@ class IntegratedController(Node):
         print("✓ Put-down sequence complete!")
         print("="*60)
         
-        # Give FSM time to fully transition to 801
-        print("\nWaiting 3 seconds for FSM to stabilize in mode 801...")
-        time.sleep(3.0)
+        # Now switch FSM from 500 to 801 after put-down is complete
+        print("\nSwitching FSM from 500 (balance) to 801 (walking)...")
+        try:
+            self.loco_client.Move(0, 0, 0)
+            time.sleep(0.5)
+            self.loco_client.SetFsmId(801)
+            time.sleep(2.0)
+            print("✓ FSM set to 801 (walking mode)")
+        except Exception as e:
+            print(f"Warning: Failed to set FSM 801: {e}")
         
         print("\n" + "="*60)
         print("Phase 5 complete")
@@ -510,6 +530,11 @@ class IntegratedController(Node):
             print("\nWaiting 2 seconds for robot to stabilize after rotation...")
             time.sleep(2.0)
             
+            # Stop robot before Phase 2
+            print("Stopping robot before Phase 2...")
+            self.loco_client.Move(0, 0, 0)
+            time.sleep(1.0)
+            
             # Phase 2: Auto-center bottle
             self.current_phase = 2
             if not self.phase2_auto_center_bottle():
@@ -531,6 +556,11 @@ class IntegratedController(Node):
             # Wait for robot to finish final rotation alignment
             print("\nWaiting 2 seconds for robot to stabilize after rotation...")
             time.sleep(2.0)
+            
+            # Stop robot before Phase 5
+            print("Stopping robot before Phase 5...")
+            self.loco_client.Move(0, 0, 0)
+            time.sleep(1.0)
             
             # Phase 5: Put down
             self.current_phase = 5
