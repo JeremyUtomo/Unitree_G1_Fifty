@@ -477,15 +477,30 @@ class ObstacleAvoidanceNavigator(Node):
         self._alignment_attempts = 0
         
         print(f"\nNew goal: ({self.goal_x:.2f}, {self.goal_y:.2f}) heading {math.degrees(self.goal_yaw):.1f}°")
+        
+        # Calculate approach waypoint: 1 meter behind the goal (opposite to goal orientation)
+        # This ensures the robot approaches the table from the correct direction
+        approach_distance = 1.0  # 1 meter approach distance
+        approach_x = self.goal_x - approach_distance * math.cos(self.goal_yaw)
+        approach_y = self.goal_y - approach_distance * math.sin(self.goal_yaw)
+        
+        print(f"Approach waypoint: ({approach_x:.2f}, {approach_y:.2f}) - 1m behind goal")
         print("Planning path with obstacle avoidance...")
         
-        # Plan path
-        path = self.planner.plan(self.current_x, self.current_y, self.goal_x, self.goal_y)
+        # Plan path to approach waypoint first (not directly to goal)
+        path = self.planner.plan(self.current_x, self.current_y, approach_x, approach_y)
         
         if path is None:
-            print("Cannot plan safe path to goal")
-            self.has_goal = False
-            return
+            print("Cannot plan safe path to approach waypoint, trying direct path to goal...")
+            # Fallback: try direct path to goal
+            path = self.planner.plan(self.current_x, self.current_y, self.goal_x, self.goal_y)
+            if path is None:
+                print("Cannot plan safe path to goal")
+                self.has_goal = False
+                return
+        else:
+            # Add the final goal position after the approach waypoint
+            path.append((self.goal_x, self.goal_y))
         
         # Store waypoints
         self.waypoints = path
